@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "post-automate",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+
+  "workflows": [
+    { "name": "pipeline", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
+  ],
+
+  "triggers": {
+    // 06:00 UTC daily dispatcher (per-user cadence in data, FR-3.6) + hourly publisher (FR-7.5)
+    "crons": ["0 6 * * *", "0 * * * *"]
+  },
+
+  // Uncomment once the Hyperdrive config exists (design §1, AR-10.6):
+  // "hyperdrive": [{ "binding": "DB", "id": "<hyperdrive-config-id>" }],
+
+  "vars": { "ENVIRONMENT": "development" },
+
+  "env": {
+    "staging": { "vars": { "ENVIRONMENT": "staging" } },
+    "production": { "vars": { "ENVIRONMENT": "production" } }
+  }
+
+  // Secrets via `wrangler secret put` (NFR-11.2) — see .dev.vars.example for the list.
+}

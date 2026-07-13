@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typescript:
+    # Backend + admin + shared: typecheck (tests join in Phase 1 — NFR-16.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  mobile:
+    runs-on: ubuntu-latest
+    # Path-filtered: mobile changes don't gate on TS jobs and vice versa (NFR-16.2)
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            mobile:
+              - 'apps/mobile/**'
+      - uses: subosito/flutter-action@v2
+        if: steps.changes.outputs.mobile == 'true'
+        with:
+          channel: stable
+      - run: flutter analyze
+        if: steps.changes.outputs.mobile == 'true'
+        working-directory: apps/mobile
+
+# Deploys (staging on merge, production on tag/approval — NFR-16.2) are added in Phase 1
+# once the Cloudflare account/token and DB are wired: wrangler deploy --env staging, etc.

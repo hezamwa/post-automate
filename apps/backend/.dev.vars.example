@@ -1,0 +1,13 @@
+# Copy to .dev.vars (gitignored) and fill in for local dev. Names only here — never commit values (NFR-11.2).
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+GOOGLE_AI_API_KEY=
+MOONSHOT_API_KEY=
+DEEPSEEK_API_KEY=
+QWEN_API_KEY=
+SANITY_WRITE_TOKEN=
+JWT_SIGNING_KEY=
+FCM_SERVICE_ACCOUNT=
+SANITY_WEBHOOK_SECRET=
+# Local Postgres connection for dev (Hyperdrive binding replaces this in production)
+DATABASE_URL=
