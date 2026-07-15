@@ -1,8 +1,8 @@
 import type { ProviderId } from "@post-automate/shared";
 import type { ProviderAdapter } from "../types";
 
-// One adapter, four providers (design §6.1): OpenAI, DeepSeek, Moonshot (Kimi), Qwen
-// (DashScope) — all expose OpenAI-compatible chat APIs; only baseURL + key differ.
+// One adapter, five providers (design §6.1): OpenAI, DeepSeek, Moonshot (Kimi), Qwen
+// (DashScope), xAI Grok — all expose OpenAI-compatible chat APIs; only baseURL + key differ.
 // JSON-mode support varies by provider: where absent, fall back to prompt-enforced JSON
 // + Zod validation with one retry (design §13).
 // TODO(phase-1): implement; OpenAI also carries the image capability (gpt-image-1).
@@ -12,6 +12,7 @@ const BASE_URLS: Partial<Record<ProviderId, string>> = {
   deepseek: "https://api.deepseek.com/v1",
   moonshot: "https://api.moonshot.ai/v1",
   qwen: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  grok: "https://api.x.ai/v1",
 };
 
 export function openAiCompat(provider: ProviderId): ProviderAdapter {

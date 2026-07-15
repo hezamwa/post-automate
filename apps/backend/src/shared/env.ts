@@ -11,7 +11,13 @@ export interface Env {
   MOONSHOT_API_KEY: string;
   DEEPSEEK_API_KEY: string;
   QWEN_API_KEY: string;
-  SANITY_WRITE_TOKEN: string;
+  GROK_API_KEY: string;
+  MANUS_API_KEY: string;
+  BRAVE_API_KEY: string;
+  // Per-creator-project Editor tokens (FR-8.4/8.5): SANITY_TOKEN_<PROJECTID>.
+  // Publishing resolves dynamically: env[`SANITY_TOKEN_${projectId.toUpperCase()}`].
+  SANITY_TOKEN_R9ZDT0S0: string; // waleed_alhezam_personal_website
+  SANITY_TOKEN_5GZ3NGJS: string; // Afnan Almass Personal Website
   JWT_SIGNING_KEY: string;
   FCM_SERVICE_ACCOUNT: string;
   SANITY_WEBHOOK_SECRET: string;

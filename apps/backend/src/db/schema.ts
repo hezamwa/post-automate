@@ -58,6 +58,10 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   fcmToken: text("fcm_token"),
   role: userRole("role").notNull().default("user"), // FR-2.5
+  // Each creator publishes to their own Sanity project (FR-8.5, OD-10 revised);
+  // the Worker resolves the token secret as SANITY_TOKEN_<PROJECTID>
+  sanityProjectId: text("sanity_project_id"),
+  sanityDataset: text("sanity_dataset").notNull().default("production"),
   // Per-user approval flag (FR-7.1); the medical user must stay false (FR-7.2 — app invariant + seed)
   autoPublish: boolean("auto_publish").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

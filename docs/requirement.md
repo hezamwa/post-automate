@@ -185,8 +185,8 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | FR-8.1 | The system MUST publish content to Sanity as **draft documents** (`drafts.` prefix via the Mutations API), at least initially. Approval — in the app or Sanity Studio — triggers the actual publish. **[OD-9 — resolved]** | MUST |
 | FR-8.2 | The Sanity `post` schema MUST include: author reference, body (Portable Text), topic tags, and a `generationMeta` object carrying model used, prompt version, source URLs, and pipeline run ID (for debugging "why did it write this"). | MUST |
 | FR-8.3 | Markdown → Portable Text conversion MUST happen server-side in the Worker, using Sanity's JS-native tooling — a direct benefit of the TypeScript stack (no separate conversion service needed). The LLM MUST NOT be asked to emit Portable Text JSON directly (it produces malformed blocks). | MUST |
-| FR-8.4 | Sanity access MUST use a **write-scoped token per environment**, stored server-side only. | MUST |
-| FR-8.5 | One Sanity project shared by both users (each a separate `author` document), with distinct `staging` and `production` datasets. **[OD-10 — resolved]** | MUST |
+| FR-8.4 | Sanity access MUST use a **write-scoped (Editor) token per project**, stored server-side only, named by project (`SANITY_TOKEN_<PROJECTID>`). | MUST |
+| FR-8.5 | Each creator publishes to their **own Sanity project** (their website's existing project), recorded on the user record (`sanity_project_id`, `sanity_dataset`) — adding a creator is a row plus one secret, never code (FR-2.4). There are **no separate staging datasets**: non-production environments write `drafts.*` only and MUST never publish. **[OD-10 — revised 2026-07-13]** | MUST |
 | FR-8.6 | Sanity webhooks MUST flow back to the Worker: publish confirmation drives the pipeline state machine; Studio-edit events feed the edit-capture loop (FR-6.9). **[OD-11 — resolved]** | MUST |
 
 ---
@@ -259,11 +259,11 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | **OD-7** | ~~Retention policy for onboarding transcripts~~ **RESOLVED (2026-07-13): keep 30 days after profile confirmation, then auto-purge.** | FR-4.6, DR-9.2 | Window allows debugging bad profile extractions. |
 | **OD-8** | ~~Model selection~~ **RESOLVED (2026-07-13): Haiku-class for interview & topic scoring; Sonnet-class for angles & article generation.** | FR-4.7, FR-6.4 | Partly superseded by OD-14: these are now the *default routes* in the AI routing config, changeable per task and per user without redeploy. |
 | **OD-9** | ~~Draft-first vs straight publish~~ **RESOLVED (2026-07-13, follows OD-4): draft-first with approval for both users.** | FR-8.1 | Revisit only if the tech user later moves to auto-publish. |
-| **OD-10** | ~~Sanity project layout~~ **RESOLVED (2026-07-13): one project shared by both users (separate `author` documents), `staging` + `production` datasets.** | FR-8.5 | — |
+| **OD-10** | ~~Sanity project layout~~ **REVISED (2026-07-13): one Sanity project per creator** — the sites already have separate projects (Waleed → `r9zdt0s0`, Afnan → `5gz3ngjs`). Production dataset only; staging isolation comes from the drafts-only rule (FR-8.5). | FR-8.4–8.5 | Original "one shared project" superseded by reality; per-project Editor tokens verified 2026-07-13. |
 | **OD-11** | ~~Sanity webhooks back to the backend?~~ **RESOLVED (2026-07-13): yes.** | FR-8.6 | Publish confirmation drives pipeline state; Studio edits feed the feedback loop. |
 | **OD-12** | ~~Monthly API budget ceiling~~ **RESOLVED (2026-07-13): US$20/month.** | NFR-11.3, NFR-11.5 | Enforced via AI Gateway caps + max-runs-per-day. |
 | **OD-13** | ~~Content format and target length~~ **RESOLVED (2026-07-12): long-form articles (~800–1,500 words) as primary format; short-form may be added per-profile later.** | FR-6.11 | — |
-| **OD-14** | **RESOLVED (2026-07-13): the AI layer is multi-provider** — Anthropic, OpenAI, Google Gemini, Moonshot, DeepSeek, Qwen (extensible) — with admin-managed routing (global default + per-user override per task type) and platform-owned API keys stored server-side. | §15, AR-10.9 | Users never supply or see provider keys (no BYOK). |
+| **OD-14** | **RESOLVED (2026-07-13): the AI layer is multi-provider** — Anthropic, OpenAI, Google Gemini, Moonshot, DeepSeek, Qwen (extensible) — with admin-managed routing (global default + per-user override per task type) and platform-owned API keys stored server-side. *Extended same day: + xAI Grok, Manus, Brave Search.* | §15, AR-10.9 | Users never supply or see provider keys (no BYOK). |
 | **OD-15** | **RESOLVED (2026-07-13): v1 derivative features = X.com short version, hero image, translation.** Voice, video, and code snippets stay routing-ready task types only. | FR-6.12–6.15 | Publishing directly to X.com deferred. |
 | **OD-16** | **RESOLVED (2026-07-13): per-user spend cap defaults to US$10/month** (configurable per user) inside the global US$20 ceiling. | FR-15.8, NFR-11.5 | — |
 | **OD-17** | **RESOLVED (2026-07-13): admin interface = separate web dashboard** (hosted alongside the existing Workers sites), consuming the same `/admin/*` API; Flutter stays user-only. | FR-2.5 | Same JWT flow; `role=admin` required. |
@@ -325,7 +325,7 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-15.1 | The system MUST support multiple AI providers behind a common adapter interface — initially **Anthropic, OpenAI, Google Gemini, Moonshot, DeepSeek, Qwen** — such that adding a provider means adding an adapter plus registry entries, with no changes to task code. | MUST |
+| FR-15.1 | The system MUST support multiple AI providers behind a common adapter interface — initially **Anthropic, OpenAI, Google Gemini, Moonshot, DeepSeek, Qwen, xAI Grok, Manus, and Brave Search** (Brave is a search-capability provider, not an LLM) — such that adding a provider means adding an adapter plus registry entries, with no changes to task code. | MUST |
 | FR-15.2 | The system MUST define a **task-type registry** covering at least: article generation, angle proposal, topic scoring, onboarding interview, X.com shortening, translation, image generation, voice (TTS), video, code snippets, web search/discovery, targeted topic research (FR-5.8), and profile refinement. Each task type declares the capability it requires (text, image, audio, video, search). | MUST |
 | FR-15.3 | A **routing configuration** MUST map each task type to a route `{provider, model, params, fallbacks[]}` — a global default per task type plus optional per-user overrides — stored in the database as versioned records, editable by the admin via an API/screen, and effective without redeploy. | MUST |
 | FR-15.4 | A **model registry** MUST list allowed models per provider with their capabilities and unit prices (per-MTok / per-image / per-second), used for route validation and cost computation. | MUST |
@@ -344,6 +344,6 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | NFR-16.1 | Automated tests MUST cover the modules (unit tests on the Workers test pool) and the API routes (integration tests). Prompt changes MUST pass a small **golden-set regression** (recorded inputs → asserted outputs, e.g. "contains disclaimer block", "X version ≤ 280 chars") before deploy. | MUST |
-| NFR-16.2 | CI/CD via GitHub Actions: merges deploy to a **staging** Worker (staging Sanity dataset, staging DB branch); production deploys are explicit (tag or manual approval). DB migrations run in CI — never by hand against production. | MUST |
+| NFR-16.2 | CI/CD via GitHub Actions: merges deploy to a **staging** Worker (drafts-only Sanity access per FR-8.5, staging DB branch); production deploys are explicit (tag or manual approval). DB migrations run in CI — never by hand against production. | MUST |
 | NFR-16.3 | Backups: point-in-time recovery enabled on the managed Postgres; weekly automated Sanity dataset export; the restore procedure documented and rehearsed once before Phase 2 exit. | MUST |
 - Duplicating published post bodies in the application database (DR-9.6).

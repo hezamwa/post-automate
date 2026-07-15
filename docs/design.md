@@ -89,7 +89,8 @@ post-automate/
   "vars": { "ENVIRONMENT": "production" }
   // Secrets via `wrangler secret put` (NFR-11.2):
   //   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_AI_API_KEY, MOONSHOT_API_KEY,
-  //   DEEPSEEK_API_KEY, QWEN_API_KEY (FR-15.9), SANITY_WRITE_TOKEN,
+  //   DEEPSEEK_API_KEY, QWEN_API_KEY, GROK_API_KEY, MANUS_API_KEY, BRAVE_API_KEY
+  //   (FR-15.9), SANITY_TOKEN_<PROJECTID> per creator project (FR-8.4),
   //   JWT_SIGNING_KEY, FCM_SERVICE_ACCOUNT, SANITY_WEBHOOK_SECRET
 }
 ```
@@ -115,6 +116,7 @@ Every table carries an owning `user_id` (FR-2.3). Sanity remains the source of t
 ```
 users              id PK · email UQ · display_name · password_hash · fcm_token
                    · role (user|admin)                                       (FR-2.5)
+                   · sanity_project_id · sanity_dataset (default production)  (FR-8.5)
                    · auto_publish bool (per-user approval flag, FR-7.1; medical user
                      is enforced FALSE at the DB level via a CHECK + app invariant, FR-7.2)
 
@@ -393,21 +395,25 @@ One interface, one adapter per provider *family*:
 
 ```ts
 interface ProviderAdapter {
-  id: "anthropic" | "openai" | "google" | "moonshot" | "deepseek" | "qwen";
+  id: "anthropic" | "openai" | "google" | "moonshot" | "deepseek" | "qwen"
+    | "grok" | "manus" | "brave";
   capabilities: Capability[];        // "chat" | "image" | "tts" | "video" | "search"
-  chat(req: ChatRequest): Promise<ChatResult>;       // normalized: messages, jsonSchema?, tools?
+  chat?(req: ChatRequest): Promise<ChatResult>;      // absent on search-only providers (Brave)
   generateImage?(req: ImageRequest): Promise<ImageResult>;
+  search?(req: SearchRequest): Promise<SearchResult>; // raw web search (Brave)
   healthCheck(model: string): Promise<HealthResult>; // cheap canary call (FR-15.5)
 }
 ```
 
-Three concrete adapters cover all six launch providers:
+Five concrete adapters cover all nine launch providers:
 
 | Adapter | Providers | Notes |
 |---|---|---|
 | `anthropic.ts` | Anthropic | Official TS SDK; structured outputs via `output_config.format`; web search tool |
-| `openai-compat.ts` | OpenAI, DeepSeek, Moonshot (Kimi), Qwen (DashScope) | One adapter, different `baseURL` + key per provider — all four expose OpenAI-compatible chat APIs. OpenAI also provides the image capability (`gpt-image-1`). |
+| `openai-compat.ts` | OpenAI, DeepSeek, Moonshot (Kimi), Qwen (DashScope), xAI Grok | One adapter, different `baseURL` + key per provider — all five expose OpenAI-compatible chat APIs. OpenAI also provides the image capability (`gpt-image-1`). |
 | `google.ts` | Google Gemini | Gemini API for chat; Imagen available as an image route |
+| `brave.ts` | Brave Search | **Search capability only** — raw web results that feed discovery/research as a two-step alternative to LLM-native search (brave → results → LLM synthesis) |
+| `manus.ts` | Manus | Agent-platform API, not chat-completions — adapter shape verified before first use (§13) |
 
 Task code never touches an adapter: it calls `ai.run(taskType, userId, input)` and the **router** resolves the rest. Adding a provider = new adapter (or a `baseURL` entry in `openai-compat`) + registry rows.
 
@@ -646,7 +652,14 @@ All `/admin/*` routes require `role=admin` (FR-2.5) and serve the separate admin
 
 ## 8. Sanity Design (FR-8.x)
 
-**Project layout (OD-10):** one project; datasets `staging` and `production`; both users are `author` documents.
+**Project layout (OD-10, revised 2026-07-13):** one Sanity project **per creator** — the sites' existing projects:
+
+| Creator | Project | Dataset | Token secret |
+|---|---|---|---|
+| Waleed | `r9zdt0s0` (waleed_alhezam_personal_website) | `production` | `SANITY_TOKEN_R9ZDT0S0` |
+| Afnan | `5gz3ngjs` (Afnan Almass Personal Website) | `production` | `SANITY_TOKEN_5GZ3NGJS` |
+
+The user record carries `sanity_project_id` + `sanity_dataset`; the publishing module resolves the token as `env["SANITY_TOKEN_" + projectId.toUpperCase()]`. **No staging datasets** — non-production Worker environments write `drafts.*` only and never call publish (FR-8.5); drafts are invisible on the live sites. Both sites' Studios add the `post`/`author` schemas — drop-in copies live in [tools/sanity-schema/](../tools/sanity-schema/).
 
 **`post` schema (FR-8.2):**
 
@@ -747,8 +760,10 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 - **Drizzle ORM** over Kysely — schema-as-code doubles as migration source (`drizzle-kit`), good Hyperdrive/postgres.js support.
 - **Angle auto-selection in v1** (not user-picked) to keep the approval flow one-tap; revisit if rejection reasons show angle mismatch.
 - **Verify at build time**: `@sanity/block-tools` + `linkedom` bundle size and behavior inside `workerd`; current Anthropic + web-search per-search pricing; Workflows `waitForEvent` max timeout (design assumes ≥ 7 days — if lower, split the pipeline into pre/post-approval workflows chained by the decision endpoint).
-- **Staging first**: point the pipeline at the `staging` dataset until Phase 2 exit; flip via env var.
-- **OpenAI-compatible adapter caveat**: DeepSeek/Moonshot/Qwen expose OpenAI-compatible chat APIs, but structured-output/JSON-mode support varies — where a provider lacks it, the adapter falls back to prompt-enforced JSON + Zod validation with one retry. Verify per provider at implementation time.
+- **Staging = drafts-only**: non-production environments write `drafts.*` into the real projects and hard-refuse publish (an `ENVIRONMENT !== "production"` guard in the publishing module) — the FR-8.5 revision replaced separate staging datasets.
+- **OpenAI-compatible adapter caveat**: DeepSeek/Moonshot/Qwen/Grok expose OpenAI-compatible chat APIs, but structured-output/JSON-mode support varies — where a provider lacks it, the adapter falls back to prompt-enforced JSON + Zod validation with one retry. Verify per provider at implementation time.
+- **Manus**: an agent-platform API (task/session-based), not chat-completions — verify its current API shape and decide the capability mapping before seeding any route to it. Until then it exists in the registry but nothing routes to it.
+- **Brave Search**: a raw-search provider. Useful as a cheaper/independent discovery backend (two-step: Brave results → LLM synthesis) or as a fallback when LLM-native web search is unavailable on a routed model. Per-search cost estimate in the registry — verify current Brave API pricing.
 - **AI Gateway coverage**: confirm the current supported-provider list (Anthropic, OpenAI, Google, DeepSeek expected; Moonshot/Qwen uncertain). Unsupported providers call direct and are covered by §10 layers 2–3 only.
 - **Health-check cost**: canaries are ~10 tokens each; daily checks across ~10 routes cost fractions of a cent — metered like everything else, attributed to no user (`user_id` null allowed on `spend_ledger` for system calls; adjust schema note in §3 accordingly).
 
@@ -756,7 +771,7 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 
 ## 14. Engineering & Operations (NFR-16)
 
-- **Environments** (NFR-16.2): a `staging` Worker environment + staging Sanity dataset + staging DB branch (Neon branches make this effectively free); production deploys are explicit. The pipeline's dataset and DB flip with `ENVIRONMENT`.
+- **Environments** (NFR-16.2): a `staging` Worker environment + staging DB branch (Neon branches make this effectively free); production deploys are explicit. Sanity isolation is the drafts-only rule (FR-8.5) — staging writes drafts to the real projects but can never publish.
 - **CI/CD (GitHub Actions)**: PR → typecheck + unit tests (Vitest with `@cloudflare/vitest-pool-workers`) + route integration tests; merge to `main` → migrate staging DB (drizzle-kit) + `wrangler deploy --env staging`; tag or manual approval → migrate + deploy production. Secrets live in GitHub environments and are mirrored to Worker secrets.
 - **Prompt regression** (NFR-16.1): a golden set of recorded inputs (topic briefs + profiles) with assertions ("contains disclaimer block", "X version ≤ 280 chars", "banned topic scored 0") runs in CI whenever `src/ai/prompts/` changes. Live-model evals are a manual `npm run eval` — CI stays free of API spend.
 - **Backups (NFR-16.3)**: PITR enabled on Neon/Supabase (≥7 days); weekly `sanity dataset export` pushed to R2 by a scheduled Worker; restore procedure written in `docs/runbook.md` and rehearsed once before Phase 2 exit.

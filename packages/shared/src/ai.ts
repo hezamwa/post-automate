@@ -7,6 +7,9 @@ export const PROVIDERS = [
   "moonshot",
   "deepseek",
   "qwen",
+  "grok", // xAI — OpenAI-compatible API
+  "manus", // agent platform — adapter shape verified at implementation (design §13)
+  "brave", // Brave Search — search capability only
 ] as const;
 export type ProviderId = (typeof PROVIDERS)[number];
 

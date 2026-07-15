@@ -17,7 +17,11 @@ export const MODEL_REGISTRY: ModelInfo[] = [
   { provider: "anthropic", model: "claude-sonnet-5", capability: "chat", inputPerMTokUsd: 3, outputPerMTokUsd: 15 },
   { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5 },
   { provider: "openai", model: "gpt-image-1", capability: "image", perImageUsd: 0.04 },
+  // Prices unset = verify current provider pricing before routing to it (meter.ts refuses unpriced models).
+  { provider: "grok", model: "grok-4", capability: "chat" },
+  { provider: "brave", model: "brave-web-search", capability: "search", perSearchUsd: 0.005 },
   // Add OpenAI/Gemini/Moonshot/DeepSeek/Qwen chat models as routes need them (FR-15.1).
+  // Manus: agent-platform API — add once the adapter's capability mapping is verified (design §13).
 ];
 
 // Seed data for ai_routes (design §6.4) — inserted by tools/seed.ts, NOT read at runtime.

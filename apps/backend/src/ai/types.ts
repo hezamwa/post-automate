@@ -50,10 +50,29 @@ export interface HealthResult {
   message: string;
 }
 
+export interface SearchRequest {
+  query: string;
+  count?: number;
+  freshness?: "day" | "week" | "month";
+}
+
+export interface SearchResultItem {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface SearchResult {
+  results: SearchResultItem[];
+  usage: Usage;
+}
+
 export interface ProviderAdapter {
   id: ProviderId;
   capabilities: Capability[];
-  chat(req: ChatRequest): Promise<ChatResult>;
+  chat?(req: ChatRequest): Promise<ChatResult>; // absent on search-only providers (Brave)
   generateImage?(req: ImageRequest): Promise<ImageResult>;
+  /** Raw web search (Brave) — feeds discovery/research as a two-step alternative to LLM-native search. */
+  search?(req: SearchRequest): Promise<SearchResult>;
   healthCheck(model: string): Promise<HealthResult>;
 }
