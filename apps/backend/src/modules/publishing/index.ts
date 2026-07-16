@@ -54,18 +54,22 @@ export async function createSanityDraft(
     provider: string;
     model: string;
     blogType?: "public" | "em";
+    /** Revisions keep the existing hero unless instructions address it (FR-7.9). */
+    existingImageAssetId?: string;
   },
 ): Promise<{ sanityDocId: string; imageAssetId?: string }> {
   const target = targetOf(args.user);
 
-  let imageAssetId: string | undefined;
-  try {
-    const hero = await generateHeroImage(env, db, { userId: args.user.id, runId: args.runId, profile: args.profile }, args.article);
-    imageAssetId = await uploadImageAsset(env, target, hero.imageBase64, hero.mimeType, `${args.article.slug}-hero.png`);
-  } catch (e) {
-    // A missing hero image should not kill the run — the reviewer sees it's absent (FR-6.13
-    // is satisfied on revise/regenerate); the failure is already in ai_health_checks.
-    console.warn("hero image generation/upload failed — draft continues without image:", e instanceof Error ? e.message : e);
+  let imageAssetId = args.existingImageAssetId;
+  if (!imageAssetId) {
+    try {
+      const hero = await generateHeroImage(env, db, { userId: args.user.id, runId: args.runId, profile: args.profile }, args.article);
+      imageAssetId = await uploadImageAsset(env, target, hero.imageBase64, hero.mimeType, `${args.article.slug}-hero.png`);
+    } catch (e) {
+      // A missing hero image should not kill the run — the reviewer sees it's absent (FR-6.13
+      // is satisfied on revise/regenerate); the failure is already in ai_health_checks.
+      console.warn("hero image generation/upload failed — draft continues without image:", e instanceof Error ? e.message : e);
+    }
   }
 
   const input: MapperInput = {
@@ -85,6 +89,19 @@ export async function createSanityDraft(
   await mutate(env, target, [{ createOrReplace: { ...doc, _id: sanityDocId } }]);
   await db.update(schema.drafts).set({ sanityDocumentId: sanityDocId }).where(eq(schema.drafts.id, args.draftId));
   return { sanityDocId, imageAssetId };
+}
+
+/** Patch the article body on an existing Sanity draft (approve-with-edits, FR-6.9). */
+export async function patchDraftMarkdown(
+  env: Env,
+  user: PublishTargetUser,
+  sanityDocId: string,
+  markdown: string,
+): Promise<void> {
+  const target = targetOf(user);
+  const field = target.projectId === "5gz3ngjs" ? "body" : "content";
+  const { markdownToPortableText } = await import("./portable-text");
+  await mutate(env, target, [{ patch: { id: sanityDocId, set: { [field]: markdownToPortableText(markdown) } } }]);
 }
 
 /** Approval → live (FR-7.5): refresh the date field, then publish. Production only (FR-8.5). */

@@ -7,7 +7,18 @@ import { NonRetryableError } from "cloudflare:workflows";
 import { profileSchema } from "@post-automate/shared";
 import { assertRunnable, SkipRunError } from "../ai/gates";
 import { createDb } from "../db/client";
-import { createDraft, setRunState } from "../db/commands";
+import {
+  addDraftRevision,
+  addEditDiff,
+  createDraft,
+  expireDraft,
+  getUserById,
+  rejectDraft,
+  scheduleDraft,
+  setDraftStatus,
+  setRunState,
+  updateDraftMarkdown,
+} from "../db/commands";
 import {
   findTopics,
   researchTopic,
@@ -21,7 +32,13 @@ import {
   writeArticle,
 } from "../modules/generation";
 import { getActiveProfile } from "../modules/profiles";
-import { createSanityDraft } from "../modules/publishing";
+import {
+  createSanityDraft,
+  deleteDraft,
+  patchDraftMarkdown,
+  publishApprovedDraft,
+} from "../modules/publishing";
+import { computeNextSlot } from "../modules/publishing/schedule";
 import type { Env } from "../shared/env";
 
 export interface PipelineParams {
@@ -41,6 +58,18 @@ export interface ApprovalEventPayload {
 }
 
 const RETRY = { retries: { limit: 2, delay: "30 seconds" as const, backoff: "exponential" as const } };
+
+async function waitForApproval(step: WorkflowStep, n: number): Promise<ApprovalEventPayload> {
+  try {
+    const event = await step.waitForEvent<ApprovalEventPayload>(`approval-${n}`, {
+      type: "approval",
+      timeout: "7 days",
+    });
+    return event.payload;
+  } catch {
+    return { action: "expired" }; // FR-7.x: 7-day timeout
+  }
+}
 
 /** One durable instance per pipeline run (AR-10.3, design §5). Steps are idempotent
  *  and runId-scoped; step returns must be small JSON (image bytes never cross steps). */
@@ -164,11 +193,109 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
         console.log("pipeline: draft ready for review", { runId, sanityDocId: sanity.sanityDocId });
       });
 
-      // TODO(module 6): approval loop with revise ≤3 (FR-7.9), publish now / next slot
-      // (FR-7.5), reject cleanup (FR-7.8), record.
       await step.do("state-pending", async () =>
         setRunState(createDb(env), runId, "pending_approval"),
       );
+
+      // ── approval loop (AR-10.5; FR-7.1/7.5/7.8/7.9): pause ≤7d, revise/change-angle ≤3× ──
+      let currentArticle = article;
+      let decision = await waitForApproval(step, 0);
+      for (let rev = 1; (decision.action === "revise" || decision.action === "change_angle") && rev <= 3; rev++) {
+        const priorMarkdown = currentArticle.markdown;
+        const instructions = decision.instructions ?? "";
+        const chosenAngleIndex = decision.angleIndex;
+        const isAngleChange = decision.action === "change_angle";
+
+        const revised = await step.do(`revise-${rev}`, RETRY, async () => {
+          const db = createDb(env);
+          await setDraftStatus(db, draft.id, "revising");
+          if (isAngleChange) {
+            const idx = Math.min(Math.max(chosenAngleIndex ?? 0, 0), angleResult.angles.length - 1);
+            return writeArticle(env, db, ctx, picked, angleResult.angles[idx]!);
+          }
+          await addDraftRevision(db, { draftId: draft.id, revisionNo: rev, instructions });
+          return writeArticle(env, db, ctx, picked, angle, {
+            currentMarkdown: priorMarkdown,
+            instructions,
+          });
+        });
+        currentArticle = revised.article;
+
+        const revisedTexts = await step.do(`rederive-${rev}`, RETRY, async () =>
+          deriveTexts(env, createDb(env), ctx, revised.article),
+        );
+
+        await step.do(`update-sanity-${rev}`, RETRY, async () => {
+          const db = createDb(env);
+          const user = await getUserById(db, userId);
+          await updateDraftMarkdown(db, draft.id, revised.article.markdown);
+          await createSanityDraft(env, db, {
+            user,
+            profile,
+            runId,
+            draftId: draft.id,
+            article: revised.article,
+            texts: revisedTexts,
+            sourceUrls: picked.sourceUrls,
+            provider: revised.provider,
+            model: revised.model,
+            existingImageAssetId: sanity.imageAssetId, // image kept unless instructions address it (FR-7.9)
+          });
+          await setDraftStatus(db, draft.id, "pending_approval");
+        });
+        await step.do(`notify-rev-${rev}`, async () => {
+          console.log("pipeline: revised draft ready", { runId, rev });
+        });
+        decision = await waitForApproval(step, rev);
+      }
+
+      // ── terminal decision ────────────────────────────────────────────────────
+      if (decision.action === "approve") {
+        const edited = decision.editedMarkdown;
+        if (edited && edited !== currentArticle.markdown) {
+          const before = currentArticle.markdown;
+          await step.do("apply-edits", RETRY, async () => {
+            const db = createDb(env);
+            await addEditDiff(db, { draftId: draft.id, userId, before, after: edited }); // FR-6.9
+            await updateDraftMarkdown(db, draft.id, edited);
+            const user = await getUserById(db, userId);
+            await patchDraftMarkdown(env, user, sanity.sanityDocId, edited);
+          });
+        }
+        if (decision.publishMode === "next_slot") {
+          await step.do("schedule-publish", async () => {
+            const db = createDb(env);
+            await scheduleDraft(db, draft.id, computeNextSlot(profile)); // hourly cron publishes (FR-7.5)
+            await setRunState(db, runId, "publishing");
+          });
+        } else {
+          await step.do("publish", RETRY, async () => {
+            const db = createDb(env);
+            const user = await getUserById(db, userId);
+            await publishApprovedDraft(env, db, { user, draftId: draft.id }); // production-only (FR-8.5)
+            await setRunState(db, runId, "published");
+          });
+        }
+      } else if (decision.action === "reject") {
+        const category = decision.rejectionCategory ?? "other";
+        await step.do("reject-cleanup", async () => {
+          const db = createDb(env);
+          const user = await getUserById(db, userId);
+          await deleteDraft(
+            env,
+            { projectId: user.sanityProjectId!, dataset: user.sanityDataset },
+            sanity.sanityDocId,
+          ); // FR-7.8: Sanity draft removed
+          await rejectDraft(db, draft.id, category);
+          await setRunState(db, runId, "rejected", `rejected: ${category}`);
+        });
+      } else {
+        await step.do("expire", async () => {
+          const db = createDb(env);
+          await expireDraft(db, draft.id); // Sanity draft stays for manual handling (design §5)
+          await setRunState(db, runId, "expired", "7-day approval timeout");
+        });
+      }
     } catch (e) {
       await step.do("record-failure", async () =>
         setRunState(createDb(env), runId, "failed", e instanceof Error ? e.message.slice(0, 500) : "unknown"),
