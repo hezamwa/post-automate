@@ -34,7 +34,8 @@ export interface ChatResult {
 export interface ImageRequest {
   model: string;
   prompt: string;
-  size?: string;
+  size?: string; // e.g. "1536x1024" (hero landscape)
+  quality?: string; // provider-specific, e.g. gpt-image-1: low | medium | high
 }
 
 export interface ImageResult {

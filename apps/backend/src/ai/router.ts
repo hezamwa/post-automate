@@ -85,6 +85,72 @@ export async function runTask(env: Env, db: Db, args: RunTaskArgs): Promise<RunT
   );
 }
 
+export interface RunImageArgs {
+  taskType: TaskType; // "image"
+  userId: string | null;
+  runId?: string | null;
+  prompt: string;
+  size?: string;
+  quality?: string;
+  bypassGlobalCap?: boolean;
+}
+
+export interface RunImageResult {
+  imageBase64: string;
+  mimeType: string;
+  provider: ProviderId;
+  model: string;
+  costUsd: number;
+}
+
+/** Image counterpart of runTask — same gates, resolution, fallback, and metering. */
+export async function runImageTask(env: Env, db: Db, args: RunImageArgs): Promise<RunImageResult> {
+  await assertAiAllowed(db, args.userId, { bypassGlobalCap: args.bypassGlobalCap });
+  const routes = await resolveRoutes(db, args.taskType, args.userId);
+  if (routes.length === 0) {
+    throw new Error(`No route configured for task '${args.taskType}' — add one in ai_routes (FR-15.3)`);
+  }
+  const failures: string[] = [];
+  for (const route of routes) {
+    const provider = route.provider as ProviderId;
+    const adapter = getAdapter(provider, env);
+    if (!adapter.generateImage) {
+      failures.push(`${provider}: no image capability`);
+      continue;
+    }
+    const params = (route.params ?? {}) as { size?: string; quality?: string };
+    try {
+      const result = await adapter.generateImage({
+        model: route.model,
+        prompt: args.prompt,
+        size: args.size ?? params.size,
+        quality: args.quality ?? params.quality,
+      });
+      const costUsd = await recordSpend(db, {
+        userId: args.userId,
+        runId: args.runId,
+        taskType: args.taskType,
+        provider,
+        model: route.model,
+        usage: result.usage,
+      });
+      return { imageBase64: result.imageBase64, mimeType: result.mimeType, provider, model: route.model, costUsd };
+    } catch (e) {
+      const { status, code } = adapter.classifyError?.(e) ?? { status: "provider_error" as const, code: undefined };
+      const detail = e instanceof Error ? e.message.slice(0, 300) : "unknown error";
+      await db.insert(schema.aiHealthChecks).values({
+        routeId: route.id,
+        status,
+        message: `${errorMessage(status, { provider, model: route.model, code })} [task=${args.taskType}] :: ${detail}`,
+      });
+      failures.push(`${provider}/${route.model} → ${status}`);
+    }
+  }
+  throw new Error(
+    `All ${routes.length} route(s) failed for task '${args.taskType}': ${failures.join("; ")}. See ai_health_checks (FR-15.6).`,
+  );
+}
+
 async function resolveRoutes(db: Db, taskType: TaskType, userId: string | null): Promise<RouteRow[]> {
   if (userId) {
     const overrides = await db

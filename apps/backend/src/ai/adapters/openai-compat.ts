@@ -115,12 +115,43 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     }
   }
 
+  async function generateImage(req: {
+    model: string;
+    prompt: string;
+    size?: string;
+    quality?: string;
+  }) {
+    if (!apiKey) throw new AdapterHttpError(401, `${cfg.keyEnv} is not set`);
+    const res = await fetch(`${cfg.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: req.model,
+        prompt: req.prompt,
+        size: req.size ?? "1536x1024",
+        ...(req.quality ? { quality: req.quality } : {}),
+        n: 1,
+      }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: Array<{ b64_json?: string }>;
+      error?: { message?: string; code?: string };
+    };
+    if (!res.ok) {
+      throw new AdapterHttpError(res.status, json.error?.message ?? `HTTP ${res.status}`, json.error?.code);
+    }
+    const b64 = json.data?.[0]?.b64_json;
+    if (!b64) throw new Error(`${provider} image response carried no b64_json`);
+    return { imageBase64: b64, mimeType: "image/png", usage: { images: 1 } };
+  }
+
   return {
     id: provider,
     capabilities: provider === "openai" ? ["chat", "image"] : ["chat"],
     chat,
     healthCheck,
     classifyError: classifyCompatError,
+    ...(provider === "openai" ? { generateImage } : {}),
   };
 }
 
