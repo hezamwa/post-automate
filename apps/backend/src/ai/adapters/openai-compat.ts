@@ -120,6 +120,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     capabilities: provider === "openai" ? ["chat", "image"] : ["chat"],
     chat,
     healthCheck,
+    classifyError: classifyCompatError,
   };
 }
 

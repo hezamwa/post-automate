@@ -198,7 +198,15 @@ export const aiHealthChecks = pgTable("ai_health_checks", {
   checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Per-user caps (FR-15.8, DR-9.10); global cap lives in app config (FR-15.10)
+// Small key-value store for admin-mutable app settings — currently the global
+// monthly cap (FR-15.10, PATCH /admin/budget)
+export const appConfig = pgTable("app_config", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Per-user caps (FR-15.8, DR-9.10); global cap lives in app_config (FR-15.10)
 export const userLimits = pgTable("user_limits", {
   userId: uuid("user_id").primaryKey().references(() => users.id),
   monthlyCapUsd: numeric("monthly_cap_usd").notNull().default("10"),

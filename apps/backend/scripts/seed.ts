@@ -100,6 +100,13 @@ async function main() {
   }
   console.log(`ai_routes: ${inserted} inserted, ${DEFAULT_ROUTES.length - inserted} already present`);
 
+  // 4. Global budget hard cap (FR-15.10; NFR-11.5) — admin-mutable via /admin/budget
+  await db
+    .insert(schema.appConfig)
+    .values({ key: "global_monthly_cap_usd", value: 20 })
+    .onConflictDoNothing();
+  console.log("app_config: global_monthly_cap_usd ensured");
+
   console.log("\nSeed complete. Pending separately:");
   console.log("- active profile for Waleed (needs sub-niches/language/voice/example posts)");
   console.log("- Afnan's user + profile (Phase 2)");

@@ -75,4 +75,6 @@ export interface ProviderAdapter {
   /** Raw web search (Brave) — feeds discovery/research as a two-step alternative to LLM-native search. */
   search?(req: SearchRequest): Promise<SearchResult>;
   healthCheck(model: string): Promise<HealthResult>;
+  /** Map a thrown error to a health status — drives the router's fallback + health records (FR-15.6). */
+  classifyError?(e: unknown): { status: HealthStatus; code?: number };
 }

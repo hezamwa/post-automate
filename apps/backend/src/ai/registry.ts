@@ -14,8 +14,8 @@ export interface ModelInfo {
 }
 
 export const MODEL_REGISTRY: ModelInfo[] = [
-  { provider: "anthropic", model: "claude-sonnet-5", capability: "chat", inputPerMTokUsd: 3, outputPerMTokUsd: 15 },
-  { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5 },
+  { provider: "anthropic", model: "claude-sonnet-5", capability: "chat", inputPerMTokUsd: 3, outputPerMTokUsd: 15, perSearchUsd: 0.01 },
+  { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5, perSearchUsd: 0.01 },
   { provider: "openai", model: "gpt-image-1", capability: "image", perImageUsd: 0.04 },
   // Verified live 2026-07-16 via /v1/models; prices are estimates — confirm before heavy use
   { provider: "openai", model: "gpt-4.1-mini", capability: "chat", inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },

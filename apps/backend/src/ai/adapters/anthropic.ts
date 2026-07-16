@@ -91,7 +91,7 @@ export function createAnthropicAdapter(env: Env): ProviderAdapter {
     }
   }
 
-  return { id: "anthropic", capabilities: ["chat", "search"], chat, healthCheck };
+  return { id: "anthropic", capabilities: ["chat", "search"], chat, healthCheck, classifyError };
 }
 
 function accumulateUsage(usage: Usage, response: Anthropic.Message): void {
