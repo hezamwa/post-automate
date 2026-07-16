@@ -28,7 +28,7 @@ const CONFIG = {
 type CompatProvider = keyof typeof CONFIG;
 
 interface CompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
   error?: { message?: string; code?: string; type?: string };
 }
@@ -72,6 +72,8 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
       body: JSON.stringify(body),
     });
     const json = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      incomplete_details?: { reason?: string };
       output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
       usage?: { input_tokens?: number; output_tokens?: number };
       error?: { message?: string; code?: string };
@@ -82,6 +84,11 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
         return responsesWithSearch(req, "web_search_preview");
       }
       throw new AdapterHttpError(res.status, json.error?.message ?? `HTTP ${res.status}`, json.error?.code);
+    }
+    if (json.status === "incomplete") {
+      throw new Error(
+        `${provider} response incomplete (${json.incomplete_details?.reason ?? "unknown"}) — raise maxTokens for this task (model=${req.model})`,
+      );
     }
     const text = (json.output ?? [])
       .filter((o) => o.type === "message")
@@ -135,6 +142,13 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
 
     const res = await complete(body);
     const text = res.choices?.[0]?.message?.content ?? "";
+    // Reasoning models can burn the whole budget invisibly — empty output is an error,
+    // never a valid result (caught this live: empty X version, FR-6.12)
+    if (!text.trim() && res.choices?.[0]?.finish_reason === "length") {
+      throw new Error(
+        `${provider} exhausted the output budget before any visible text (reasoning model) — raise maxTokens (model=${req.model})`,
+      );
+    }
     const usage: Usage = {
       inputTokens: res.usage?.prompt_tokens,
       outputTokens: res.usage?.completion_tokens,
@@ -236,5 +250,7 @@ export function classifyCompatError(e: unknown): { status: HealthStatus; code?: 
     if (code === 400 && /model/i.test(e.message)) return { status: "model_not_found", code };
     return { status: "provider_error", code };
   }
-  return { status: "timeout" };
+  // fetch/network failures are TypeError; anything else is a provider/parse problem
+  if (e instanceof TypeError) return { status: "timeout" };
+  return { status: "provider_error" };
 }

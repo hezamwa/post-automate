@@ -148,7 +148,7 @@ async function boundedShorten(
     taskType,
     userId: ctx.userId,
     runId: ctx.runId,
-    input: { system, messages: [{ role: "user", content: markdown }], maxTokens: 3000 },
+    input: { system, messages: [{ role: "user", content: markdown }], maxTokens: 8000 },
   });
   let text = first.text.trim();
   if (text.length > maxChars) {
@@ -163,7 +163,7 @@ async function boundedShorten(
           { role: "assistant", content: text },
           { role: "user", content: `That is ${text.length} characters — the hard limit is ${maxChars}. Rewrite it shorter.` },
         ],
-        maxTokens: 3000,
+        maxTokens: 8000,
       },
     });
     if (retry.text.trim().length < text.length) text = retry.text.trim();

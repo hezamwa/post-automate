@@ -54,7 +54,7 @@ export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<Candida
       messages: [{ role: "user", content: prompt.user }],
       jsonSchema: candidatesSchema as unknown as Record<string, unknown>,
       webSearch: true,
-      maxTokens: 6000,
+      maxTokens: 16000,
     },
   });
   const { candidates } = result.parsed as { candidates: TopicBrief[] };
@@ -134,7 +134,7 @@ export async function researchTopic(
       messages: [{ role: "user", content: prompt.user }],
       jsonSchema: researchSchema as unknown as Record<string, unknown>,
       webSearch: true,
-      maxTokens: 6000,
+      maxTokens: 16000,
     },
   });
   const brief = result.parsed as TopicBrief & { keyFacts: string[] };
