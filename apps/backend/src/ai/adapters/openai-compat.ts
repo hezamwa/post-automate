@@ -52,9 +52,66 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     return json;
   }
 
+  // Web search on OpenAI runs through the Responses API with the web_search tool;
+  // the other compat providers have no search capability.
+  async function responsesWithSearch(req: ChatRequest, toolType = "web_search"): Promise<ChatResult> {
+    if (!apiKey) throw new AdapterHttpError(401, `${cfg.keyEnv} is not set`);
+    const body: Record<string, unknown> = {
+      model: req.model,
+      tools: [{ type: toolType }],
+      instructions: req.system,
+      input: req.messages.map((m) => ({ role: m.role, content: m.content })),
+      max_output_tokens: req.maxTokens ?? 6000,
+    };
+    if (req.jsonSchema) {
+      body.text = { format: { type: "json_schema", name: "result", strict: true, schema: req.jsonSchema } };
+    }
+    const res = await fetch(`${cfg.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+      error?: { message?: string; code?: string };
+    };
+    if (!res.ok) {
+      // older accounts may only know the preview tool name
+      if (res.status === 400 && toolType === "web_search" && /web_search/.test(json.error?.message ?? "")) {
+        return responsesWithSearch(req, "web_search_preview");
+      }
+      throw new AdapterHttpError(res.status, json.error?.message ?? `HTTP ${res.status}`, json.error?.code);
+    }
+    const text = (json.output ?? [])
+      .filter((o) => o.type === "message")
+      .flatMap((o) => o.content ?? [])
+      .filter((c) => c.type === "output_text")
+      .map((c) => c.text ?? "")
+      .join("");
+    const searches = (json.output ?? []).filter((o) => o.type === "web_search_call").length;
+    const usage: Usage = {
+      inputTokens: json.usage?.input_tokens,
+      outputTokens: json.usage?.output_tokens,
+      ...(searches ? { searches } : {}),
+    };
+    let parsed: unknown;
+    if (req.jsonSchema) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`${provider} returned non-JSON for a schema request (model=${req.model})`);
+      }
+    }
+    return { text, parsed, usage };
+  }
+
   async function chat(req: ChatRequest): Promise<ChatResult> {
     if (req.webSearch) {
-      throw new Error(`${provider} adapter has no web-search capability — route search tasks to anthropic or brave`);
+      if (provider !== "openai") {
+        throw new Error(`${provider} adapter has no web-search capability — route search tasks to anthropic, openai, or brave`);
+      }
+      return responsesWithSearch(req);
     }
     const messages: Array<{ role: string; content: string }> = [];
     let system = req.system ?? "";
@@ -147,7 +204,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
 
   return {
     id: provider,
-    capabilities: provider === "openai" ? ["chat", "image"] : ["chat"],
+    capabilities: provider === "openai" ? ["chat", "image", "search"] : ["chat"],
     chat,
     healthCheck,
     classifyError: classifyCompatError,

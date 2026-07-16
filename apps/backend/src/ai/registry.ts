@@ -18,8 +18,8 @@ export const MODEL_REGISTRY: ModelInfo[] = [
   { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5, perSearchUsd: 0.01 },
   { provider: "openai", model: "gpt-image-1", capability: "image", perImageUsd: 0.04 },
   // Verified live 2026-07-16 via /v1/models; prices are estimates — confirm before heavy use
-  { provider: "openai", model: "gpt-4.1-mini", capability: "chat", inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6 },
-  { provider: "openai", model: "gpt-5-mini", capability: "chat", inputPerMTokUsd: 0.25, outputPerMTokUsd: 2 },
+  { provider: "openai", model: "gpt-4.1-mini", capability: "chat", inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6, perSearchUsd: 0.01 },
+  { provider: "openai", model: "gpt-5-mini", capability: "chat", inputPerMTokUsd: 0.25, outputPerMTokUsd: 2, perSearchUsd: 0.01 },
   // Prices unset = verify current provider pricing before routing to it (meter.ts refuses unpriced models).
   { provider: "grok", model: "grok-4", capability: "chat" },
   { provider: "brave", model: "brave-web-search", capability: "search", perSearchUsd: 0.005 },
@@ -47,7 +47,9 @@ export const DEFAULT_ROUTES: ReadonlyArray<{
   { taskType: "image", provider: "openai", model: "gpt-image-1" },
   // OpenAI fallbacks (verified live 2026-07-16) — used automatically on
   // anthropic auth/quota/rate-limit/5xx failures (FR-15.6). Discovery/research
-  // have no fallback: the compat adapter has no web search (route to brave later).
+  // fall back to OpenAI's Responses API web_search tool.
+  { taskType: "discovery", provider: "openai", model: "gpt-5-mini", priority: 1 },
+  { taskType: "research", provider: "openai", model: "gpt-5-mini", priority: 1 },
   { taskType: "interview", provider: "openai", model: "gpt-5-mini", priority: 1 },
   { taskType: "scoring", provider: "openai", model: "gpt-5-mini", priority: 1 },
   { taskType: "angles", provider: "openai", model: "gpt-5-mini", priority: 1 },
