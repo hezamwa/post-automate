@@ -693,8 +693,7 @@ Publishing obligations this adds (owned by a **per-site mapper** in `modules/pub
 
 **Draft-first flow (FR-8.1):** the Worker creates `drafts.draft-{runId}` via the Mutations API with the write-scoped token; approval triggers the publish action for that ID. Generated hero images are uploaded to Sanity's assets API first, then referenced from the site's image field (`image` / `featuredImage`) with generated alt text — the image, channel versions, and translation all live on the same draft, so one approval covers everything.
 
-**Markdown → Portable Text (FR-8.3):** in-Worker conversion:
-`markdown-it` (MD → HTML) → `htmlToBlocks` from `@sanity/block-tools`, passing `linkedom`'s `parseHTML` as the DOM implementation (pure-JS, Workers-compatible). Validate the resulting blocks against the schema before mutation; on conversion failure the step retries once, then fails the run — never ask the LLM for Portable Text.
+**Markdown → Portable Text (FR-8.3):** in-Worker conversion via a direct `marked`-lexer → Portable Text converter (`modules/publishing/portable-text.ts`) — no HTML intermediary, no DOM shim. It emits only what the sites' block types allow (normal/h2–h4/blockquote, bullet/number lists, strong/em/code marks, link annotations); unknown constructs flatten to text rather than being lost. Never ask the LLM for Portable Text. *(Implemented 2026-07-16, replacing the earlier `@sanity/block-tools` + `linkedom` plan — verified against the live schema: 35-block article round-tripped.)*
 
 **Webhooks (FR-8.6):** GROQ-powered webhook on `post` create/update/publish → `/webhooks/sanity` (HMAC signature verified with `SANITY_WEBHOOK_SECRET`). Publish events close the run's state machine; update events on published docs are diffed and stored to `edit_diffs` (captures Studio-side edits for the feedback loop).
 
@@ -763,7 +762,7 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 - **Hono** for routing — idiomatic on Workers, tiny, middleware-friendly. (Convention, not a requirement; swap costs nothing early.)
 - **Drizzle ORM** over Kysely — schema-as-code doubles as migration source (`drizzle-kit`), good Hyperdrive/postgres.js support.
 - **Angle auto-selection in v1** (not user-picked) to keep the approval flow one-tap; revisit if rejection reasons show angle mismatch.
-- **Verify at build time**: `@sanity/block-tools` + `linkedom` bundle size and behavior inside `workerd`; current Anthropic + web-search per-search pricing; Workflows `waitForEvent` max timeout (design assumes ≥ 7 days — if lower, split the pipeline into pre/post-approval workflows chained by the decision endpoint).
+- **Verify at build time**: current Anthropic + web-search per-search pricing; Workflows `waitForEvent` max timeout (design assumes ≥ 7 days — if lower, split the pipeline into pre/post-approval workflows chained by the decision endpoint). *(The markdown→Portable-Text concern was resolved by the marked-based converter — see §8.)*
 - **Staging = drafts-only**: non-production environments write `drafts.*` into the real projects and hard-refuse publish (an `ENVIRONMENT !== "production"` guard in the publishing module) — the FR-8.5 revision replaced separate staging datasets.
 - **OpenAI-compatible adapter caveat**: DeepSeek/Moonshot/Qwen/Grok expose OpenAI-compatible chat APIs, but structured-output/JSON-mode support varies — where a provider lacks it, the adapter falls back to prompt-enforced JSON + Zod validation with one retry. Verify per provider at implementation time.
 - **Manus**: an agent-platform API (task/session-based), not chat-completions — verify its current API shape and decide the capability mapping before seeding any route to it. Until then it exists in the registry but nothing routes to it.

@@ -70,6 +70,12 @@ export async function proposeAngles(
   return { angles: parsed.angles, recommendedIndex: idx };
 }
 
+export interface ArticleResult {
+  article: Article;
+  provider: string; // → generationMeta (FR-8.2)
+  model: string;
+}
+
 /** FR-6.3 step 2: the article, plus slug/excerpt/tags/imageAlt in one structured call (FR-8.2 mapper inputs). */
 export async function writeArticle(
   env: Env,
@@ -78,7 +84,7 @@ export async function writeArticle(
   topic: TopicBrief,
   angle: Angle,
   revision?: { currentMarkdown: string; instructions: string },
-): Promise<Article> {
+): Promise<ArticleResult> {
   const system = articleSystem(ctx.profile, /* approvedExamples: from Sanity later (FR-6.2) */ []);
   const user = revision
     ? `Here is the current draft:\n\n${revision.currentMarkdown}\n\nRevise it according to these instructions from the creator, keeping every editorial and compliance rule intact:\n"${revision.instructions}"\n\nReturn the full revised article with updated slug/excerpt/tags/imageAlt.`
@@ -96,7 +102,7 @@ export async function writeArticle(
   });
   const article = result.parsed as Article;
   if (article.markdown.trim().startsWith("CANNOT_COMPLY")) throw new ComplianceRefusalError();
-  return article;
+  return { article, provider: result.provider, model: result.model };
 }
 
 /** FR-6.12/6.14 text derivatives — channel versions per profile.channels + translation for bilingual. */

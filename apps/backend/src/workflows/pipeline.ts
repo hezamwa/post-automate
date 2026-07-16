@@ -21,6 +21,7 @@ import {
   writeArticle,
 } from "../modules/generation";
 import { getActiveProfile } from "../modules/profiles";
+import { createSanityDraft } from "../modules/publishing";
 import type { Env } from "../shared/env";
 
 export interface PipelineParams {
@@ -116,7 +117,7 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
       const angle = angleResult.angles[angleIndex]!;
 
       // ── article (FR-6.3 step 2; guardrails + CANNOT_COMPLY hard-fail) ───────
-      const article = await step.do("draft", RETRY, async () => {
+      const { article, provider, model } = await step.do("draft", RETRY, async () => {
         try {
           return await writeArticle(env, createDb(env), ctx, picked, angle);
         } catch (e) {
@@ -140,13 +141,34 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
         }),
       );
 
-      // TODO(module 5): create-sanity-draft (hero image generate+upload in-step, FR-6.13;
-      // per-site mapper, FR-8.2), FCM notify, approval loop with revise ≤3 (FR-7.9),
-      // publish now / next slot (FR-7.5), record.
+      // ── reviewable Sanity draft: hero image + per-site mapping, all in-step (FR-6.13/8.1-8.3) ──
+      const sanity = await step.do("create-sanity-draft", RETRY, async () => {
+        const db = createDb(env);
+        const user = await db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userId) });
+        if (!user) throw new NonRetryableError(`user ${userId} not found`);
+        return createSanityDraft(env, db, {
+          user,
+          profile,
+          runId,
+          draftId: draft.id,
+          article,
+          texts,
+          sourceUrls: picked.sourceUrls,
+          provider,
+          model,
+        });
+      });
+
+      await step.do("notify", async () => {
+        // TODO(phase-2): FCM push "draft ready for review" (FR-7.1)
+        console.log("pipeline: draft ready for review", { runId, sanityDocId: sanity.sanityDocId });
+      });
+
+      // TODO(module 6): approval loop with revise ≤3 (FR-7.9), publish now / next slot
+      // (FR-7.5), reject cleanup (FR-7.8), record.
       await step.do("state-pending", async () =>
         setRunState(createDb(env), runId, "pending_approval"),
       );
-      console.log("pipeline: draft ready", { runId, draftId: draft.id, derivatives: Object.keys(texts) });
     } catch (e) {
       await step.do("record-failure", async () =>
         setRunState(createDb(env), runId, "failed", e instanceof Error ? e.message.slice(0, 500) : "unknown"),
