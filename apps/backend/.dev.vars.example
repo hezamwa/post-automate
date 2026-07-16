@@ -16,3 +16,8 @@ FCM_SERVICE_ACCOUNT=
 SANITY_WEBHOOK_SECRET=
 # Local Postgres connection for dev (Hyperdrive binding replaces this in production)
 DATABASE_URL=
+# Neon account API key — used by setup/tooling scripts only, never a Worker secret
+NEON_API_KEY=
+# X.com OAuth app credentials — parked for the future X publishing integration (post-v1, FR-6.12)
+X_CLIENT_ID=
+X_CLIENT_SECRET=

@@ -30,7 +30,7 @@
 
 - **One Workers project** (AR-10.1) containing the REST API, the four bounded-context modules (AR-10.2), and the Workflow class. Modules communicate via in-process interfaces only.
 - **Cloudflare Workflows** run each pipeline execution as a durable, step-per-stage instance (AR-10.3); **Cron Triggers** launch instances per user cadence (AR-10.4).
-- **Hyperdrive → managed PostgreSQL** (Neon or Supabase) for all pipeline state (AR-10.6, §9 of requirements).
+- **Hyperdrive → Neon PostgreSQL** for all pipeline state (AR-10.6, §9 of requirements); staging uses a Neon branch.
 - **AI Router** (in-Worker module, AR-10.9) resolves every AI call to a configured provider route — task code never touches a provider SDK. Cloudflare **AI Gateway** is the egress for supported providers: spend caps, caching, per-request logs (NFR-11.3, FR-15.x).
 - **Sanity** holds content; the Worker receives its webhooks (FR-8.6).
 - **FCM** delivers "draft ready for review" pushes to Flutter (FR-7.1).
