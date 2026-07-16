@@ -100,7 +100,7 @@ async function main() {
   console.log(`ai_routes: ${inserted} inserted, ${DEFAULT_ROUTES.length - inserted} already present`);
 
   console.log("\nSeed complete. Pending separately:");
-  console.log("- active profile for Waleed (needs sub-niches/language/voice/example posts + author doc ID)");
+  console.log("- active profile for Waleed (needs sub-niches/language/voice/example posts)");
   console.log("- Afnan's user + profile (Phase 2)");
   await sql.end();
 }

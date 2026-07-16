@@ -187,10 +187,9 @@ Stored in `profiles.payload`; versioned and immutable (FR-3.10). This same schem
   "properties": {
     "identity": {
       "type": "object", "additionalProperties": false,
-      "required": ["displayName", "sanityAuthorId"],
-      "properties": {
-        "displayName":    { "type": "string" },
-        "sanityAuthorId": { "type": "string" }              // FR-3.1
+      "required": ["displayName"],                          // FR-3.1 — author ref dropped
+      "properties": {                                       // 2026-07-16 (single-author sites)
+        "displayName":    { "type": "string" }
       }
     },
     "domain": {
@@ -672,36 +671,27 @@ All `/admin/*` routes require `role=admin` (FR-2.5) and serve the separate admin
 | Waleed | `r9zdt0s0` (waleed_alhezam_personal_website) | `production` | `SANITY_TOKEN_R9ZDT0S0` |
 | Afnan | `5gz3ngjs` (Afnan Almass Personal Website) | `production` | `SANITY_TOKEN_5GZ3NGJS` |
 
-The user record carries `sanity_project_id` + `sanity_dataset`; the publishing module resolves the token as `env["SANITY_TOKEN_" + projectId.toUpperCase()]`. **No staging datasets** — non-production Worker environments write `drafts.*` only and never call publish (FR-8.5); drafts are invisible on the live sites. Both sites' Studios add the `post`/`author` schemas — drop-in copies live in [tools/sanity-schema/](../tools/sanity-schema/).
+The user record carries `sanity_project_id` + `sanity_dataset`; the publishing module resolves the token as `env["SANITY_TOKEN_" + projectId.toUpperCase()]`. **No staging datasets** — non-production Worker environments write `drafts.*` only and never call publish (FR-8.5); drafts are invisible on the live sites.
 
-**`post` schema (FR-8.2):**
+**Content models (FR-8.2 — aligned with the live site schemas 2026-07-16):** each site keeps its **existing blog type**; the pipeline adapts per site instead of imposing a shared `post` type. Four pipeline fields were added to both Studio sources (already edited in the local site repos): `aiDisclosure`, `xVersion`, `linkedinVersion`, and read-only `generationMeta { provider, model, promptVersion, pipelineRunId, sourceUrls[] }`.
 
-```ts
-defineType({
-  name: "post", type: "document",
-  fields: [
-    { name: "title", type: "string" },
-    { name: "language", type: "string" },                 // ar | en | bilingual
-    { name: "author", type: "reference", to: [{ type: "author" }] },
-    { name: "body", type: "array", of: [{ type: "block" }] },   // Portable Text
-    { name: "tags", type: "array", of: [{ type: "string" }] },
-    { name: "mainImage", type: "image" },                         // FR-6.13 hero image
-    { name: "xVersion", type: "text" },                           // FR-6.12 X.com short version
-    { name: "linkedinVersion", type: "text" },                    // FR-6.12 LinkedIn version
-    { name: "bodyTranslated", type: "array", of: [{ type: "block" }] },  // FR-6.14
-    { name: "aiDisclosure", type: "boolean" },                    // FR-6.18 — site frontends render
-                                                                  // the note when true (default false)
-    { name: "generationMeta", type: "object", fields: [
-      { name: "model", type: "string" },
-      { name: "promptVersion", type: "string" },
-      { name: "pipelineRunId", type: "string" },
-      { name: "sourceUrls", type: "array", of: [{ type: "url" }] },
-    ]},
-  ],
-})
-```
+| | Waleed — `post` (`r9zdt0s0`) | Afnan — `blogPost` (`5gz3ngjs`) |
+|---|---|---|
+| Body | `content` (blockContent) | `body` (blocks + inline images, alt required) |
+| Image | `image` (+ alt) | `featuredImage` (+ **required** alt) |
+| Date | `datePublished` | `publishDate` |
+| Language | `language: ar\|en` per document | hidden `language`, managed by the document-internationalization plugin |
+| Extra required | `slug` | `slug`, `blogType: public\|em` |
+| Taxonomy | `categories`, `tags` | `tags`, `seo` object |
 
-**Draft-first flow (FR-8.1):** the Worker creates `drafts.draft-{runId}` via the Mutations API with the write-scoped token; approval triggers the publish action for that ID. Generated hero images are uploaded to Sanity's assets API first, then referenced from `mainImage` — the image, X version, and translation all live on the same draft, so one approval covers everything.
+Publishing obligations this adds (owned by a **per-site mapper** in `modules/publishing/`):
+- generate `slug` (transliterated for Arabic titles), `excerpt`, and **image alt text** with every article — alt is mandatory on Afnan's site;
+- set the site's date field at publish time;
+- Afnan: choose `blogType` (public vs em) — a profile/topic setting captured at her Phase-2 onboarding;
+- translation (FR-6.14) maps per site: Waleed = one document per language (his `language` field — bilingual ⇒ two documents), Afnan = a second document linked via `translation.metadata` (her i18n plugin); implemented when a bilingual profile actually needs it;
+- **no author reference** — both are single-author sites (`identity.sanityAuthorId` dropped from the profile).
+
+**Draft-first flow (FR-8.1):** the Worker creates `drafts.draft-{runId}` via the Mutations API with the write-scoped token; approval triggers the publish action for that ID. Generated hero images are uploaded to Sanity's assets API first, then referenced from the site's image field (`image` / `featuredImage`) with generated alt text — the image, channel versions, and translation all live on the same draft, so one approval covers everything.
 
 **Markdown → Portable Text (FR-8.3):** in-Worker conversion:
 `markdown-it` (MD → HTML) → `htmlToBlocks` from `@sanity/block-tools`, passing `linkedom`'s `parseHTML` as the DOM implementation (pure-JS, Workers-compatible). Validate the resulting blocks against the schema before mutation; on conversion failure the step retries once, then fails the run — never ask the LLM for Portable Text.

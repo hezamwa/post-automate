@@ -17,9 +17,10 @@ export const complianceSchema = z.object({
 
 export const profileSchema = z
   .object({
+    // Author reference dropped 2026-07-16 — both sites are single-author; the Sanity
+    // project binding lives on the user record (FR-8.5)
     identity: z.object({
       displayName: z.string().min(1),
-      sanityAuthorId: z.string().min(1),
     }),
     domain: z.object({
       field: z.enum(["tech", "medical"]),

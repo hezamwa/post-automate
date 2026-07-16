@@ -48,7 +48,7 @@ The Creator Profile is the input to every downstream prompt and is modeled as a 
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-3.1 | The profile MUST capture **Identity**: user ID, display name, Sanity author reference. | MUST |
+| FR-3.1 | The profile MUST capture **Identity**: user ID and display name. *(The Sanity author reference was dropped 2026-07-16 — both sites are single-author with no `author` type; the Sanity project binding lives on the user record, FR-8.5.)* | MUST |
 | FR-3.2 | The profile MUST capture **Domain**: tech vs medical, plus sub-niches (e.g., "AI tooling, mobile dev" vs "cardiology, public health"). | MUST |
 | FR-3.3 | The profile MUST capture **Voice**: tone descriptors, formality level, sentence-length preference, emoji/hashtag policy, hook style. | MUST |
 | FR-3.4 | The profile MUST capture **Audience**: who the user writes for and the expertise level assumed. | MUST |
@@ -184,7 +184,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-8.1 | The system MUST publish content to Sanity as **draft documents** (`drafts.` prefix via the Mutations API), at least initially. Approval — in the app or Sanity Studio — triggers the actual publish. **[OD-9 — resolved]** | MUST |
-| FR-8.2 | The Sanity `post` schema MUST include: author reference, body (Portable Text), topic tags, and a `generationMeta` object carrying model used, prompt version, source URLs, and pipeline run ID (for debugging "why did it write this"). | MUST |
+| FR-8.2 | The pipeline extends **each site's existing blog type** (Waleed: `post`; Afnan: `blogPost`) with `aiDisclosure`, `xVersion`, `linkedinVersion`, and a read-only `generationMeta` object (provider, model, prompt version, pipeline run ID, source URLs — for debugging "why did it write this"). A **per-site publishing mapper** MUST satisfy each site's required fields: slug, excerpt, image alt text, date, and (Afnan) `blogType`. *(Aligned with the live site schemas 2026-07-16.)* | MUST |
 | FR-8.3 | Markdown → Portable Text conversion MUST happen server-side in the Worker, using Sanity's JS-native tooling — a direct benefit of the TypeScript stack (no separate conversion service needed). The LLM MUST NOT be asked to emit Portable Text JSON directly (it produces malformed blocks). | MUST |
 | FR-8.4 | Sanity access MUST use a **write-scoped (Editor) token per project**, stored server-side only, named by project (`SANITY_TOKEN_<PROJECTID>`). | MUST |
 | FR-8.5 | Each creator publishes to their **own Sanity project** (their website's existing project), recorded on the user record (`sanity_project_id`, `sanity_dataset`) — adding a creator is a row plus one secret, never code (FR-2.4). There are **no separate staging datasets**: non-production environments write `drafts.*` only and MUST never publish. **[OD-10 — revised 2026-07-13]** | MUST |

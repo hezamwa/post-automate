@@ -1,14 +1,25 @@
-# Sanity Studio schema (drop-in copies)
+# Sanity Studio schemas — live in the site repos, not here
 
-The Studios live in the sites' repo, not here (design §1). Copy into **each** site's Studio:
+On 2026-07-16 the pipeline fields were added **directly to each site's Studio source**
+(both repos are local on this machine); the drop-in copies that used to live here are gone.
 
-1. `post.ts` → the site's schema folder; register `post` in the schema index.
-2. `author.ts` → only if the site has no `author` document type yet.
-3. Deploy the Studio as usual in that repo.
+| Site | Studio schema file | Blog type |
+|---|---|---|
+| waleedalhezam.sa | `codebase/studio/schemaTypes/postType.ts` | `post` |
+| afnanalmass.sa | `web/src/sanity/schemaTypes/blogPost.ts` | `blogPost` (fields grouped under "AI Pipeline") |
 
-Do this for **both** projects — Waleed (`r9zdt0s0`) and Afnan (`5gz3ngjs`).
-The pipeline creates `drafts.post-…` documents and publishes them on approval; the
-`author` reference is matched via each profile's `identity.sanityAuthorId` (FR-3.1),
-so note each site's author document ID for the profile seed.
+Fields added to both types:
+`aiDisclosure` (boolean) · `xVersion` (text) · `linkedinVersion` (text) ·
+`generationMeta { provider, model, promptVersion, pipelineRunId, sourceUrls[] }` (readOnly).
 
-Keep these files in sync with docs/design.md §8 — they are the source the copies come from.
+After any Studio-source change, from each studio directory with a logged-in Sanity CLI:
+
+```sh
+npx sanity schema deploy   # robot tokens can't do this — needs your CLI login
+```
+
+…and redeploy the Studio itself per that repo's process so editors see the new fields.
+
+The pipeline's per-site field mapping (slug/excerpt/alt/date/blogType obligations,
+translation strategy per site) is documented in `docs/design.md` §8 and implemented in
+`apps/backend/src/modules/publishing/`.
