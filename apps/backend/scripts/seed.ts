@@ -77,18 +77,19 @@ async function main() {
   // 3. Global default AI routes (FR-15.3; design §6.4) — user_id NULL, priority 0
   let inserted = 0;
   for (const r of DEFAULT_ROUTES) {
+    const priority = r.priority ?? 0;
     const exists = await db.query.aiRoutes.findFirst({
       where: and(
         isNull(schema.aiRoutes.userId),
         eq(schema.aiRoutes.taskType, r.taskType),
-        eq(schema.aiRoutes.priority, 0),
+        eq(schema.aiRoutes.priority, priority),
       ),
     });
     if (exists) continue;
     await db.insert(schema.aiRoutes).values({
       userId: null,
       taskType: r.taskType,
-      priority: 0,
+      priority,
       provider: r.provider,
       model: r.model,
       params: {},

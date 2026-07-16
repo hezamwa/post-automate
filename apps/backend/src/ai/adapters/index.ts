@@ -18,7 +18,7 @@ export function getAdapter(provider: ProviderId, env: Env): ProviderAdapter {
     case "moonshot":
     case "qwen":
     case "grok":
-      return openAiCompat(provider);
+      return openAiCompat(provider, env);
     case "google":
       return google;
     case "brave":
