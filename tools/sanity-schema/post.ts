@@ -29,6 +29,12 @@ export const post = defineType({
       type: "text",
       description: "Short X/Twitter version generated with the article (FR-6.12)",
     }),
+    defineField({
+      name: "linkedinVersion",
+      title: "LinkedIn version",
+      type: "text",
+      description: "LinkedIn post version generated with the article (FR-6.12)",
+    }),
     defineField({ name: "tags", type: "array", of: [{ type: "string" }] }),
     defineField({
       name: "aiDisclosure",

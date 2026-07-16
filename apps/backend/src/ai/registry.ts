@@ -38,6 +38,7 @@ export const DEFAULT_ROUTES: ReadonlyArray<{
   { taskType: "angles", provider: "anthropic", model: "claude-sonnet-5" },
   { taskType: "article", provider: "anthropic", model: "claude-sonnet-5" },
   { taskType: "shorten_x", provider: "anthropic", model: "claude-haiku-4-5" },
+  { taskType: "shorten_linkedin", provider: "anthropic", model: "claude-haiku-4-5" },
   { taskType: "translate", provider: "anthropic", model: "claude-sonnet-5" },
   { taskType: "image", provider: "openai", model: "gpt-image-1" },
   // voice / video / code_snippet: routing-ready, no route seeded (FR-6.15)

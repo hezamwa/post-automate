@@ -57,6 +57,8 @@ export const profileSchema = z
       .default({ type: "article", targetWords: 1200 }),
     examplePosts: z.array(z.string().min(1)).min(2), // FR-3.8: few-shot source
     aiDisclosure: z.boolean().default(false), // FR-6.18 (OD-22)
+    // FR-3.12: which social derivatives to generate per article (FR-6.12)
+    channels: z.array(z.enum(["x", "linkedin"])).default(["x", "linkedin"]),
     compliance: complianceSchema.optional(),
   })
   .superRefine((profile, ctx) => {

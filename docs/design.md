@@ -266,6 +266,10 @@ Stored in `profiles.payload`; versioned and immutable (FR-3.10). This same schem
       "items": { "type": "string" }                          // FR-3.8, few-shot source
     },
     "aiDisclosure": { "type": "boolean" },                   // FR-6.18 — default false (OD-22)
+    "channels": {                                            // FR-3.12 — which social derivatives
+      "type": "array",                                       // to generate (default: both)
+      "items": { "type": "string", "enum": ["x", "linkedin"] }
+    },
     "compliance": {                                          // FR-3.9 — required when
       "type": "object", "additionalProperties": false,       // domain.field == "medical"
       "required": ["noDiagnosis", "noDosage", "noCaseReferences", "disclaimerText"],
@@ -454,6 +458,7 @@ Admin edits routes via `/admin/ai/*` (§7) — changes are DB rows, not deploys.
 | `angles` | anthropic / `claude-sonnet-5` | Quality-bearing (FR-6.3) | ~$0.01 |
 | `article` | anthropic / `claude-sonnet-5` | Long-form + strong Arabic (FR-6.4) | ~$0.05–0.10 |
 | `shorten_x` | anthropic / `claude-haiku-4-5` | Compression task (FR-6.12) | ~$0.005 |
+| `shorten_linkedin` | anthropic / `claude-haiku-4-5` | LinkedIn version (FR-6.12) | ~$0.01 |
 | `translate` | anthropic / `claude-sonnet-5` | Arabic quality matters (FR-6.14) | ~$0.03 |
 | `research` | anthropic / `claude-sonnet-5` + `web_search_20260209` | Targeted research for user-requested topics (FR-5.8) | ~$0.06 |
 | `image` | openai / `gpt-image-1` | Solid default hero-image model; swap via config (FR-6.13) | ~$0.04/image |
@@ -582,6 +587,14 @@ shorten_x:  System = VOICE block + "Compress the article below into ONE X.com po
             (≤280 chars incl. hashtags per profile policy; language = {language}).
             Keep the hook, drop the detail, end with value — no clickbait."
             User = final article markdown.
+            Channel derivatives run only for channels in profile.channels (FR-3.12).
+
+shorten_linkedin:
+            System = VOICE block + "Rewrite the article below as ONE LinkedIn post
+            (≤3,000 chars; professional register; language = {language}). Structure:
+            strong first line (shows before 'see more'), 2–4 short paragraphs of
+            substance, a closing line inviting the full read. Hashtags per profile
+            policy, max 3." User = final article markdown.
 
 translate:  System = VOICE block + "Translate the article below into {targetLanguage}.
             Preserve structure, tone, and the meaning of the disclaimer block exactly.
@@ -674,6 +687,7 @@ defineType({
     { name: "tags", type: "array", of: [{ type: "string" }] },
     { name: "mainImage", type: "image" },                         // FR-6.13 hero image
     { name: "xVersion", type: "text" },                           // FR-6.12 X.com short version
+    { name: "linkedinVersion", type: "text" },                    // FR-6.12 LinkedIn version
     { name: "bodyTranslated", type: "array", of: [{ type: "block" }] },  // FR-6.14
     { name: "aiDisclosure", type: "boolean" },                    // FR-6.18 — site frontends render
                                                                   // the note when true (default false)
@@ -782,7 +796,7 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 ## 15. Client Surfaces
 
 **Flutter app (users):**
-login · drafts queue · **new post — request a topic (title/notes/links) and pick an angle from the 3 proposals** (FR-5.8, FR-6.3) · draft review — article, hero image, X version, translation toggle, compliance checklist (medical), actions: approve-now / approve-next-slot / edit / revise-with-instructions (≤3, FR-7.9) / change-angle / reject-with-category (FR-7.8) · cancel a scheduled publish · retract button on published posts (FR-7.6) · onboarding chat · profile settings form (FR-3.11) · my spend & limits view · notifications.
+login · drafts queue · **new post — request a topic (title/notes/links) and pick an angle from the 3 proposals** (FR-5.8, FR-6.3) · draft review — article, hero image, channel versions (X / LinkedIn per profile), translation toggle, compliance checklist (medical), actions: approve-now / approve-next-slot / edit / revise-with-instructions (≤3, FR-7.9) / change-angle / reject-with-category (FR-7.8) · cancel a scheduled publish · retract button on published posts (FR-7.6) · onboarding chat · profile settings form (FR-3.11) · my spend & limits view · notifications.
 
 **Admin web dashboard (separate small web app alongside the existing Workers sites — OD-17):**
 monitor (spend / caps / route health / run stats, §10) · AI routes CRUD with per-route test button showing the stored human-readable result (FR-15.5) · per-user limits · global budget · user management (create user, FR-2.5) · run explorer (states, errors, rejected topics with reasons).
