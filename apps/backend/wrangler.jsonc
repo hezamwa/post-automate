@@ -6,24 +6,35 @@
   "compatibility_flags": ["nodejs_compat"], // postgres.js needs node:net/tls at runtime
   "observability": { "enabled": true },
 
+  // ── top level = local dev (`wrangler dev`); DATABASE_URL from .dev.vars, no Hyperdrive ──
   "workflows": [
     { "name": "pipeline", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
   ],
-
   "triggers": {
     // 06:00 UTC daily dispatcher (per-user cadence in data, FR-3.6) + hourly publisher (FR-7.5)
     "crons": ["0 6 * * *", "0 * * * *"]
   },
-
-  // Uncomment once the Hyperdrive config exists (design §1, AR-10.6):
-  // "hyperdrive": [{ "binding": "DB", "id": "<hyperdrive-config-id>" }],
-
   "vars": { "ENVIRONMENT": "development" },
 
+  // Wrangler environments do NOT inherit bindings — each env carries the full set.
+  // Secrets are per-env: `wrangler secret put <NAME> --env staging|production` (NFR-11.2).
   "env": {
-    "staging": { "vars": { "ENVIRONMENT": "staging" } },
-    "production": { "vars": { "ENVIRONMENT": "production" } }
+    "staging": {
+      "vars": { "ENVIRONMENT": "staging" }, // drafts-only: publish is refused (FR-8.5)
+      "workflows": [
+        { "name": "pipeline-staging", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
+      ],
+      "hyperdrive": [{ "binding": "DB", "id": "27ca81d3c2bd45dcb76eafc2917bb0ab" }],
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *"] }
+    },
+    "production": {
+      "vars": { "ENVIRONMENT": "production" },
+      "workflows": [
+        { "name": "pipeline-production", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
+      ],
+      // TODO: dedicated production Neon branch + its own Hyperdrive config before go-live
+      "hyperdrive": [{ "binding": "DB", "id": "27ca81d3c2bd45dcb76eafc2917bb0ab" }],
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *"] }
+    }
   }
-
-  // Secrets via `wrangler secret put` (NFR-11.2) — see .dev.vars.example for the list.
 }
