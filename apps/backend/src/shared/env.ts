@@ -22,4 +22,6 @@ export interface Env {
   FCM_SERVICE_ACCOUNT: string;
   SANITY_WEBHOOK_SECRET: string;
   DATABASE_URL?: string;
+  // Optional: Cloudflare AI Gateway route for Anthropic (design §6.4). Unset = direct API.
+  AI_GATEWAY_ANTHROPIC_BASE_URL?: string;
 }

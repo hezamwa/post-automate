@@ -12,6 +12,7 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@post-automate/shared": "workspace:*",
     "drizzle-orm": "^0.38.0",
     "hono": "^4.6.0",
