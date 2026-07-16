@@ -9,6 +9,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -183,7 +184,8 @@ export const aiRoutes = pgTable(
     version: integer("version").notNull().default(1),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("ai_routes_user_task_priority").on(t.userId, t.taskType, t.priority)],
+  // NULLS NOT DISTINCT: global-default rows have user_id NULL and must still be unique
+  (t) => [unique("ai_routes_user_task_priority").on(t.userId, t.taskType, t.priority).nullsNotDistinct()],
 );
 
 // Health-check history with human-readable messages (FR-15.5, DR-9.9)

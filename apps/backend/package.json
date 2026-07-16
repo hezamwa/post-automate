@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p scripts --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@post-automate/shared": "workspace:*",
@@ -19,7 +20,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260708.1",
+    "@types/node": "^24.0.0",
     "drizzle-kit": "^0.30.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.20.0"
   }
