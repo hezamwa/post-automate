@@ -46,5 +46,55 @@ jobs:
         if: steps.changes.outputs.mobile == 'true'
         working-directory: codebase/apps/mobile
 
-# Deploys (staging on merge, production on tag/approval — NFR-16.2) are added in Phase 1
-# once the Cloudflare account/token and DB are wired: wrangler deploy --env staging, etc.
+  deploy-staging:
+    # NFR-16.2: merges to main migrate the staging DB and deploy the staging Worker.
+    # Skips (green, with a notice) until the repo secrets exist — see docs/runbook.md §4:
+    #   CLOUDFLARE_API_TOKEN   (Workers Scripts:Edit + Workflows + R2 permissions)
+    #   CLOUDFLARE_ACCOUNT_ID
+    #   STAGING_DATABASE_URL   (direct Neon connection string, not Hyperdrive)
+    needs: typescript
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - id: gate
+        env:
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$STAGING_DATABASE_URL" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Staging deploy skipped — add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and STAGING_DATABASE_URL repo secrets to enable it (NFR-16.2, docs/runbook.md §4)"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ready == 'true'
+      - uses: pnpm/action-setup@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: codebase/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: codebase
+      - name: Migrate staging DB (drizzle journal — never by hand)
+        if: steps.gate.outputs.ready == 'true'
+        run: pnpm exec drizzle-kit migrate
+        working-directory: codebase/apps/backend
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      - name: Deploy staging Worker
+        if: steps.gate.outputs.ready == 'true'
+        run: pnpm exec wrangler deploy --env staging
+        working-directory: codebase/apps/backend
+
+# Production deploys stay explicit (tag or manual approval — NFR-16.2): add a
+# tag-triggered job mirroring deploy-staging once the production env exists
+# (dedicated Neon branch + Hyperdrive config + per-env secrets — wrangler.jsonc TODO).
