@@ -64,6 +64,13 @@
       "when": 1787338228611,
       "tag": "0008_draft-blog-type",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787340228646,
+      "tag": "0009_derivative-meta",
+      "breakpoints": true
     }
   ]
 }

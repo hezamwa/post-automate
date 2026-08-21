@@ -32,9 +32,19 @@ function ctxWith(overrides: Parameters<typeof techProfile>[0] = {}) {
   return { userId: "u1", runId: "r1", profile: techProfile(overrides) };
 }
 
+const TRANSLATED = {
+  title: "عنوان",
+  excerpt: "ملخص",
+  imageAlt: "وصف",
+  markdown: "# مرحبا",
+};
+
 beforeEach(() => {
   runTaskMock.mockReset();
-  runTaskMock.mockResolvedValue({ text: "tiny post" } as never);
+  // shorten tasks read .text; the structured translate task reads .parsed
+  runTaskMock.mockImplementation(async (_e, _d, args) =>
+    (args.taskType === "translate" ? { parsed: TRANSLATED } : { text: "tiny post" }) as never,
+  );
 });
 
 describe("deriveTexts — skip-not-fail (FR-15.13, DR-9.14)", () => {
@@ -96,11 +106,15 @@ describe("deriveTexts — skip-not-fail (FR-15.13, DR-9.14)", () => {
     });
   });
 
-  it("produces the translation when requested and routable", async () => {
+  it("produces the translation with the second document's metadata when routable", async () => {
     const ctx = ctxWith({ translation: { enabled: true, targetLanguage: "ar" } });
     const { texts, outcomes } = await deriveTexts(env, db, ctx, article);
-    expect(texts.translatedMarkdown).toBe("tiny post");
-    expect(outcomes.find((o) => o.kind === "translation")).toMatchObject({ outcome: "produced" });
+    expect(texts.translatedMarkdown).toBe("# مرحبا");
+    expect(outcomes.find((o) => o.kind === "translation")).toMatchObject({
+      outcome: "produced",
+      content: "# مرحبا",
+      meta: { title: "عنوان", excerpt: "ملخص", imageAlt: "وصف", targetLanguage: "ar" },
+    });
   });
 
   it("lets a GateError halt the step — pauses and caps are not derivative failures (FR-15.12a)", async () => {

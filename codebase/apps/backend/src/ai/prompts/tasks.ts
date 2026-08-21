@@ -213,8 +213,41 @@ export function shortenLinkedInPrompt(profile: Profile): string {
 
 // FR-6.14: the target comes from profile.translation.targetLanguage — or, for the
 // Phase-2 per-draft override, from the request — never inferred from primaryLanguage.
-export function translatePrompt(targetLanguage: Language): string {
-  return `Translate the article below into ${LANGUAGE_NAMES[targetLanguage]}. Preserve the Markdown structure, tone, and the meaning of any disclaimer block exactly. Do not add or remove claims. Reply with the translated Markdown only.`;
+// Structured output: the translated edition becomes its own Sanity document at publish
+// (design §8), which needs title/excerpt/imageAlt in the target language too.
+export const translateSchema = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    excerpt: { type: "string" },
+    imageAlt: { type: "string" },
+    markdown: { type: "string" },
+  },
+  required: ["title", "excerpt", "imageAlt", "markdown"],
+  additionalProperties: false,
+} as const;
+
+export interface TranslatedArticle {
+  title: string;
+  excerpt: string;
+  imageAlt: string;
+  markdown: string;
+}
+
+export function translatePrompt(targetLanguage: Language): { system: string; user: (source: { title?: string; excerpt?: string; imageAlt?: string; markdown: string }) => string } {
+  const lang = LANGUAGE_NAMES[targetLanguage];
+  return {
+    system: `Translate the article below into ${lang}. Preserve the Markdown structure, tone, and the meaning of any disclaimer block exactly. Do not add or remove claims. Return title, excerpt (1-2 sentences) and imageAlt in ${lang} — translated from the originals when given, otherwise written from the article — plus the full translated markdown.`,
+    user: (source) =>
+      [
+        source.title ? `TITLE: ${source.title}` : null,
+        source.excerpt ? `EXCERPT: ${source.excerpt}` : null,
+        source.imageAlt ? `IMAGE ALT: ${source.imageAlt}` : null,
+        `ARTICLE:\n${source.markdown}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+  };
 }
 
 export function imagePrompt(headline: string, profile: Profile): string {

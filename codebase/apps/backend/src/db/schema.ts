@@ -186,6 +186,9 @@ export const draftDerivatives = pgTable(
     content: text("content"), // x/linkedin/translation text when produced
     assetRef: text("asset_ref"), // Sanity asset id for hero_image
     reason: text("reason"), // why skipped/failed — human-readable
+    // Translation only: {title, excerpt, imageAlt, targetLanguage} — everything the
+    // publish-time second document (design §8) needs beyond the markdown in `content`
+    meta: jsonb("meta"),
     revisionNo: integer("revision_no").notNull().default(0), // re-derived per revision (FR-7.9)
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

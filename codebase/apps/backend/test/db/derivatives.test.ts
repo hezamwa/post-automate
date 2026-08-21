@@ -150,6 +150,48 @@ describe("translateDraft — per-draft override, unroutable case (FR-6.14, FR-15
   });
 });
 
+describe("currentProducedTranslation — the publish-time staleness guard (design §8)", () => {
+  const META = { title: "عنوان", excerpt: "ملخص", imageAlt: "وصف", targetLanguage: "ar" };
+
+  it("returns the translation only when produced at the draft's CURRENT revision", async () => {
+    const { currentProducedTranslation } = await import("../../src/modules/publishing");
+    const userId = await seedUser(db);
+    const runId = await seedRun(db, userId);
+    const draftId = await seedDraftRow(userId, runId);
+    await recordDerivatives(db, draftId, 0, [
+      { kind: "translation", outcome: "produced", content: "# مرحبا", meta: META },
+    ]);
+    expect(await currentProducedTranslation(db, draftId)).toMatchObject({
+      markdown: "# مرحبا",
+      meta: { targetLanguage: "ar" },
+    });
+  });
+
+  it("never publishes a STALE earlier-revision translation after a revision replaced the set", async () => {
+    const { currentProducedTranslation } = await import("../../src/modules/publishing");
+    const userId = await seedUser(db);
+    const runId = await seedRun(db, userId);
+    const draftId = await seedDraftRow(userId, runId);
+    await recordDerivatives(db, draftId, 0, [
+      { kind: "translation", outcome: "produced", content: "old translation", meta: META },
+    ]);
+    // revision 1 re-derived without a translation surviving (failed, or user dropped it)
+    await recordDerivatives(db, draftId, 1, [{ kind: "x", outcome: "produced", content: "v1" }]);
+    expect(await currentProducedTranslation(db, draftId)).toBeNull();
+  });
+
+  it("ignores failed rows and rows without meta", async () => {
+    const { currentProducedTranslation } = await import("../../src/modules/publishing");
+    const userId = await seedUser(db);
+    const runId = await seedRun(db, userId);
+    const draftId = await seedDraftRow(userId, runId);
+    await recordDerivatives(db, draftId, 0, [
+      { kind: "translation", outcome: "failed", reason: "no route" },
+    ]);
+    expect(await currentProducedTranslation(db, draftId)).toBeNull();
+  });
+});
+
 describe("dropDraftTranslation (FR-6.14 DELETE)", () => {
   it("removes the current revision's translation and reports absence honestly", async () => {
     const userId = await seedUser(db);

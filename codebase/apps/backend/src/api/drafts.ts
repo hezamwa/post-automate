@@ -7,7 +7,7 @@ import { getUserById, rejectDraft, scheduleDraft, setDraftBlogType, setRunState 
 import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { computeNextSlot } from "../modules/publishing/schedule";
-import { deleteDraft, publishApprovedDraft, retractPublished } from "../modules/publishing";
+import { deleteDraft, publishApprovedDraft, retractPublished, retractTranslatedEdition } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
 import type { ApprovalEventPayload } from "../workflows/pipeline";
 
@@ -130,6 +130,7 @@ export const drafts = new Hono<AuthedEnv>()
         runId: draft.runId,
         userId: c.get("userId"),
         markdown: draft.markdown,
+        title: (draft.angle as { headline?: string } | null)?.headline,
         targetLanguage: body.targetLanguage,
       });
       // outcome may be `failed` (e.g. no enabled translate route) — recorded and returned
@@ -181,7 +182,9 @@ export const drafts = new Hono<AuthedEnv>()
       return c.json({ error: `draft is ${draft.status}, not published` }, 409);
     }
     const user = await getUserById(db, draft.userId);
-    await retractPublished(c.env, { projectId: user.sanityProjectId!, dataset: user.sanityDataset }, draft.sanityDocumentId);
+    const target = { projectId: user.sanityProjectId!, dataset: user.sanityDataset };
+    await retractPublished(c.env, target, draft.sanityDocumentId);
+    await retractTranslatedEdition(c.env, db, target, { id: draft.id, runId: draft.runId }); // FR-7.6 covers both editions
     await db
       .update(schema.drafts)
       .set({ status: "retracted", sanityDocumentId: `drafts.${draft.sanityDocumentId}` })

@@ -1,0 +1,1 @@
+ALTER TABLE "draft_derivatives" ADD COLUMN "meta" jsonb;

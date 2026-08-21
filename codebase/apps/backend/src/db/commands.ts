@@ -222,6 +222,8 @@ export interface DerivativeRecord {
   content?: string;
   assetRef?: string;
   reason?: string;
+  /** Translation only: {title, excerpt, imageAlt, targetLanguage} for the publish-time second document (design §8). */
+  meta?: Record<string, unknown>;
 }
 
 /**
@@ -244,6 +246,7 @@ export async function recordDerivatives(
         content: r.content ?? null,
         assetRef: r.assetRef ?? null,
         reason: r.reason ?? null,
+        meta: r.meta ?? null,
         revisionNo,
       })
       .onConflictDoUpdate({
@@ -253,6 +256,7 @@ export async function recordDerivatives(
           content: r.content ?? null,
           assetRef: r.assetRef ?? null,
           reason: r.reason ?? null,
+          meta: r.meta ?? null,
           createdAt: new Date(),
         },
       });

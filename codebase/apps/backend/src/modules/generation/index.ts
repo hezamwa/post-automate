@@ -15,8 +15,10 @@ import {
   shortenLinkedInPrompt,
   shortenXPrompt,
   translatePrompt,
+  translateSchema,
   type Angle,
   type TopicBrief,
+  type TranslatedArticle,
 } from "../../ai/prompts/tasks";
 import type { Db } from "../../db/client";
 import type { Env } from "../../shared/env";
@@ -42,6 +44,8 @@ export interface TextDerivativeOutcome {
   outcome: "produced" | "skipped" | "failed";
   content?: string;
   reason?: string; // why skipped/failed — human-readable, surfaced on the review screen
+  /** Translation only: what the publish-time second document needs (design §8). */
+  meta?: { title: string; excerpt: string; imageAlt: string; targetLanguage: Language };
 }
 
 export interface DeriveTextsResult {
@@ -171,7 +175,12 @@ export async function deriveTexts(env: Env, db: Db, ctx: RunCtx, article: Articl
 
   // targetLanguage is guaranteed by profileSchema when enabled (FR-3.13)
   if (ctx.profile.translation.enabled && ctx.profile.translation.targetLanguage) {
-    const result = await runTranslation(env, db, ctx, article.markdown, ctx.profile.translation.targetLanguage);
+    const result = await runTranslation(env, db, ctx, {
+      title: article.title,
+      excerpt: article.excerpt,
+      imageAlt: article.imageAlt,
+      markdown: article.markdown,
+    }, ctx.profile.translation.targetLanguage);
     if (result.outcome === "produced") texts.translatedMarkdown = result.content;
     outcomes.push(result);
   }
@@ -183,21 +192,29 @@ async function runTranslation(
   env: Env,
   db: Db,
   ctx: { userId: string; runId: string | null },
-  markdown: string,
+  source: { title?: string; excerpt?: string; imageAlt?: string; markdown: string },
   targetLanguage: Language,
 ): Promise<TextDerivativeOutcome> {
   try {
+    const prompt = translatePrompt(targetLanguage);
     const result = await runTask(env, db, {
       taskType: "translate",
       userId: ctx.userId,
       runId: ctx.runId,
       input: {
-        system: translatePrompt(targetLanguage),
-        messages: [{ role: "user", content: markdown }],
+        system: prompt.system,
+        messages: [{ role: "user", content: prompt.user(source) }],
+        jsonSchema: translateSchema as unknown as Record<string, unknown>,
         maxTokens: 16000,
       },
     });
-    return { kind: "translation", outcome: "produced", content: result.text.trim() };
+    const parsed = result.parsed as TranslatedArticle;
+    return {
+      kind: "translation",
+      outcome: "produced",
+      content: parsed.markdown.trim(), // the review screen renders content (DR-9.14)
+      meta: { title: parsed.title, excerpt: parsed.excerpt, imageAlt: parsed.imageAlt, targetLanguage },
+    };
   } catch (e) {
     if (e instanceof GateError) throw e; // pauses/caps halt — never recorded as a mere failed derivative
     const reason =
@@ -233,9 +250,22 @@ async function currentRevisionNo(db: Db, draftId: string): Promise<number> {
 export async function translateDraft(
   env: Env,
   db: Db,
-  args: { draftId: string; runId: string | null; userId: string; markdown: string; targetLanguage: Language },
+  args: {
+    draftId: string;
+    runId: string | null;
+    userId: string;
+    markdown: string;
+    title?: string;
+    targetLanguage: Language;
+  },
 ): Promise<TextDerivativeOutcome & { revisionNo: number }> {
-  const result = await runTranslation(env, db, { userId: args.userId, runId: args.runId }, args.markdown, args.targetLanguage);
+  const result = await runTranslation(
+    env,
+    db,
+    { userId: args.userId, runId: args.runId },
+    { title: args.title, markdown: args.markdown },
+    args.targetLanguage,
+  );
   const revisionNo = await currentRevisionNo(db, args.draftId);
   await db
     .insert(schema.draftDerivatives)
@@ -245,11 +275,18 @@ export async function translateDraft(
       outcome: result.outcome,
       content: result.content ?? null,
       reason: result.reason ?? null,
+      meta: result.meta ?? null,
       revisionNo,
     })
     .onConflictDoUpdate({
       target: [schema.draftDerivatives.draftId, schema.draftDerivatives.kind, schema.draftDerivatives.revisionNo],
-      set: { outcome: result.outcome, content: result.content ?? null, reason: result.reason ?? null, createdAt: new Date() },
+      set: {
+        outcome: result.outcome,
+        content: result.content ?? null,
+        reason: result.reason ?? null,
+        meta: result.meta ?? null,
+        createdAt: new Date(),
+      },
     });
   return { ...result, revisionNo };
 }
