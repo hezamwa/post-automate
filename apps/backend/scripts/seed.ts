@@ -1,4 +1,5 @@
-// Seed: users, per-user limits, global default AI routes (FR-2.1, FR-15.3).
+// Seed: users, per-user limits, the active tech profile, global default AI routes
+// (FR-2.1, FR-15.3, design §12 Phase 1).
 // Idempotent — upserts by natural keys; re-run any time. Run: pnpm db:seed
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -6,9 +7,11 @@ import { dirname, join } from "node:path";
 import { eq, isNull, and } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { PROFILE_SCHEMA_VERSION, type Profile } from "@post-automate/shared";
 import { DEFAULT_ROUTES } from "../src/ai/registry";
 import * as schema from "../src/db/schema";
 import { hashPassword } from "../src/shared/password";
+import { AFNAN_PROFILE, WALEED_PROFILE } from "./profiles";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +64,25 @@ async function seedUser(input: {
   return row!.id;
 }
 
+/** Profiles are append-only (FR-3.10): seed only if the user has NO versions at all. */
+async function seedProfile(userId: string, payload: Profile) {
+  const existing = await db.query.profiles.findFirst({
+    where: eq(schema.profiles.userId, userId),
+  });
+  if (existing) {
+    console.log(`profile exists for ${userId} (v${existing.version}, ${existing.status}) — not touching it`);
+    return;
+  }
+  await db.insert(schema.profiles).values({
+    userId,
+    version: 1,
+    status: "active",
+    payload,
+    schemaVersion: PROFILE_SCHEMA_VERSION, // DR-9.15
+  });
+  console.log(`profile v1 (active, schema v${PROFILE_SCHEMA_VERSION}) created for ${userId}`);
+}
+
 async function main() {
   // 1. Users (FR-2.1: data, not code). Afnan joins in Phase 2.
   const waleedId = await seedUser({
@@ -73,6 +95,21 @@ async function main() {
   // 2. Per-user limits (FR-15.8 defaults: $10/month, 2 runs/day, 30 req/min)
   await db.insert(schema.userLimits).values({ userId: waleedId }).onConflictDoNothing();
   console.log("user_limits ensured for", waleedId);
+
+  // 2b. Hand-written tech profile with explicit primaryLanguage + translation
+  // (FR-3.7/3.13, design §12 Phase 1)
+  await seedProfile(waleedId, WALEED_PROFILE);
+
+  // 2c. The medical user (design §12 Phase 2): guardrails ride on the compliance block;
+  // auto_publish is FALSE and must stay so (FR-7.2)
+  const afnanId = await seedUser({
+    email: "afnan@afnanalmass.sa",
+    displayName: "Dr. Afnan Almass",
+    role: "user",
+    sanityProjectId: "5gz3ngjs",
+  });
+  await db.insert(schema.userLimits).values({ userId: afnanId }).onConflictDoNothing();
+  await seedProfile(afnanId, AFNAN_PROFILE);
 
   // 3. Global default AI routes (FR-15.3; design §6.4) — user_id NULL, priority 0
   let inserted = 0;
@@ -100,16 +137,11 @@ async function main() {
   }
   console.log(`ai_routes: ${inserted} inserted, ${DEFAULT_ROUTES.length - inserted} already present`);
 
-  // 4. Global budget hard cap (FR-15.10; NFR-11.5) — admin-mutable via /admin/budget
-  await db
-    .insert(schema.appConfig)
-    .values({ key: "global_monthly_cap_usd", value: 20 })
-    .onConflictDoNothing();
-  console.log("app_config: global_monthly_cap_usd ensured");
+  // No app_config seeding: rows are OVERRIDES only — every flag's default (incl. the
+  // $20 global cap, NFR-11.5) lives in src/shared/flags.ts, and a missing row is
+  // normal (FR-15.14). Overrides are written via setFlag so they land in the audit.
 
-  console.log("\nSeed complete. Pending separately:");
-  console.log("- active profile for Waleed (needs sub-niches/language/voice/example posts)");
-  console.log("- Afnan's user + profile (Phase 2)");
+  console.log("\nSeed complete.");
   await sql.end();
 }
 
