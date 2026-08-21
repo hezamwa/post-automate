@@ -1,19 +1,1 @@
-# Dependencies / build
-node_modules/
-dist/
-build/
-.wrangler/
-
-# Secrets — never in the tree (NFR-11.2). Only *.example templates are committed.
-.dev.vars
-.env
-.env.*
-!.env.example
-!.dev.vars.example
-
-# OS / editor
 .DS_Store
-*.log
-.idea/
-.vscode/*
-!.vscode/settings.json

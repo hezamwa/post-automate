@@ -1,6 +1,6 @@
 # Requirements — Automated Social Content Pipeline ("post-automate")
 
-> Derived from [app_overview.md](app_overview.md). This document restates the overview as testable requirements. Decisions the overview left open are collected in [§12 Open Decisions](#12-open-decisions) and referenced inline as **[OD-n]**. **As of 2026-07-13 all decisions are resolved** — the requirements are complete and ready for design.
+> Derived from [app_overview.md](app_overview.md). This document restates the overview as testable requirements. Decisions the overview left open are collected in [§12 Open Decisions](#12-open-decisions) and referenced inline as **[OD-n]**. **As of 2026-08-21 all decisions affecting Phases 1–4 are resolved** — the requirements are complete and ready for design.
 
 **Requirement keying:** `FR` = functional, `NFR` = non-functional, `AR` = architecture/technical, `DR` = data. Priorities: **MUST** / **SHOULD** / **MAY** (RFC-2119 style).
 
@@ -34,7 +34,8 @@ Discover topics → Score/filter against profile → Generate draft
 | FR-2.3 | Each user MUST only see and act on their own profile, drafts, and pipeline runs. Every domain table MUST carry an owning user ID from day one. | MUST |
 | FR-2.4 | The design MUST NOT assume "exactly two users" anywhere outside seed data — no hard-coded user IDs, no per-user configuration in code, no two-user assumptions in the UI. | MUST |
 | FR-2.5 | Users MUST have a role (`user` \| `admin`). Admin-only endpoints (routing, budgets, monitoring, user management) require the admin role, and creating a user is an admin API action — data, not a code change. The admin interface is a **separate web dashboard**; the Flutter app stays user-only. **[OD-17 — resolved]** | MUST |
-| FR-2.6 | An admin MUST be able to **delete a user** (right to erasure): cascades all personal DB records (profile versions, onboarding transcripts, drafts, edit diffs; spend-ledger rows are anonymized rather than deleted, to preserve accounting) and unassigns Sanity authorship. Whether published content stays up is an editorial decision — it is not auto-deleted. | MUST |
+| FR-2.6 | An admin MUST be able to **delete a user** (right to erasure): cascades all personal DB records (profile versions, onboarding transcripts, drafts, edit diffs; spend-ledger rows are anonymized rather than deleted, to preserve accounting) and unassigns Sanity authorship. Whether published content stays up is an editorial decision — it is not auto-deleted. *(Refined 2026-08-21: erasure is refused for a user named as the acting admin in `app_config_audit` rows — the audit is append-only and its actor invariant would be falsified (DR-9.13). Suspend such an account instead (FR-2.7); a full erase-vs-audit policy for admins is deliberately left open.)* | MUST |
+| FR-2.7 | An admin MUST be able to **suspend and reactivate a user** — a reversible state, distinct from deletion (FR-2.6). While suspended: no scheduled or user-requested pipeline run may start, no AI spend may be incurred on the user's behalf, and API authentication is refused with a human-readable reason. Profiles, drafts and history are left intact and become available again on reactivation. Suspension MUST NOT be expressed by setting the user's spend cap to zero — that reports as a budget condition, not an account state. **[OD-25 — resolved]** | MUST |
 
 > **[OD-1 — RESOLVED]** This is a prototype expected to grow into a multi-user system soon. Consequence: do not build full multi-tenant infrastructure now, but every schema, auth, and pipeline decision must survive N users without a rewrite (FR-2.1–2.4).
 
@@ -54,7 +55,7 @@ The Creator Profile is the input to every downstream prompt and is modeled as a 
 | FR-3.4 | The profile MUST capture **Audience**: who the user writes for and the expertise level assumed. | MUST |
 | FR-3.5 | The profile MUST capture **Topic policy**: weighted interests plus explicit exclusions/banned topics. Banned topics are hard constraints for the medical user. | MUST |
 | FR-3.6 | The profile MUST capture **Cadence**: posts per week and preferred publish times. | MUST |
-| FR-3.7 | The profile MUST capture **Language** preference — Arabic, English, or bilingual — as a per-user setting; no language is hard-coded anywhere in the pipeline. **[OD-3 — resolved]** | MUST |
+| FR-3.7 | The profile MUST capture **Primary language** — the single language every article is generated in (Arabic or English) — as a per-user setting. No language is hard-coded anywhere in the pipeline, and the primary language governs discovery, article, and channel-derivative generation alike. **[OD-3 — revised]** | MUST |
 | FR-3.8 | The profile SHOULD store 2–3 example posts (written or admired by the user) collected at onboarding, for use as few-shot generation examples. | SHOULD |
 | FR-3.9 | The medical user's profile MUST carry explicit compliance constraints (e.g., "never give dosage advice, always append a disclaimer, never reference cases or the institution"). **[OD-6 — resolved]** | MUST |
 
@@ -65,6 +66,7 @@ The Creator Profile is the input to every downstream prompt and is modeled as a 
 | FR-3.10 | Profiles MUST be stored as **versioned, immutable records** — never mutated in place — so profile versions can be diffed against content-quality outcomes when personalization drifts. | MUST |
 | FR-3.11 | Users SHOULD be able to update their profile both by re-running the conversational onboarding and by directly editing fields in a settings form (chat for initial capture, form for tweaks). | SHOULD |
 | FR-3.12 | The profile MUST carry a **channels** list (v1 values: `x`, `linkedin`) controlling which social derivatives are generated per article (FR-6.12) — channels are per-user config, never code (FR-2.4). | MUST |
+| FR-3.13 | The profile MUST capture **Translation preference** independently of the primary language (FR-3.7): either off, or a target language into which each article is translated after generation. Translation is opt-in — a user writing in one language only is the default, not a special case. Together these two fields replace the earlier single Arabic/English/bilingual setting; "bilingual" is now expressed as a primary language plus translation enabled. **[OD-3 — revised]** | MUST |
 
 ---
 
@@ -150,7 +152,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 |----|-------------|----------|
 | FR-6.12 | For every article draft, the pipeline MUST generate a **short social version per channel enabled in the profile's `channels` list** (v1 channels: **X.com** ≤280 chars; **LinkedIn** ≤3,000 chars, professional register) — each text-only, in the creator's voice, reviewed together with the article. Publishing to the channels themselves is out of scope for v1 — the texts are stored with the post for manual use. *(Extended for LinkedIn + per-profile channels 2026-07-16.)* | MUST |
 | FR-6.13 | For every article draft, the pipeline MUST generate a **hero image** and attach it to the Sanity draft, reviewed and approved together with the article. Medical guardrails extend to imagery: abstract/schematic only, nothing implying real patients or procedures. | MUST |
-| FR-6.14 | For bilingual users, **translation** MUST be an explicit pipeline task (generate in the primary language, then translate via the configured translation route), replacing single-call bilingual generation. Translation MUST also be available on demand per draft. | MUST |
+| FR-6.14 | **Translation** MUST be an explicit pipeline task — generate in the profile's primary language (FR-3.7), then translate via the configured translation route — never single-call bilingual generation. The task runs only when the profile's translation preference is enabled (FR-3.13). The user MUST be able to override per draft in both directions: request a translation for a draft when the profile has translation off, and skip it for a draft when the profile has it on. *(Revised 2026-08-21: translation is opt-in per FR-3.13, no longer implied by a "bilingual" language setting.)* | MUST |
 | FR-6.15 | Voice narration, video, and code-snippet generation are **routing-ready task types only** (§15) — no product feature in v1. | — |
 
 ### 6.6 Content integrity
@@ -210,6 +212,10 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | DR-9.10 | The database MUST store per-user limits (monthly cap, runs/day, requests/min) and per-user spend records (FR-15.7–15.8). | MUST |
 | DR-9.11 | The generated **markdown is stored with the draft until publish** — it is the app's editing source-of-truth and the diff base — then purged when the draft is published, rejected, or expired (after which DR-9.6 applies: Sanity holds the only copy). | MUST |
 | DR-9.12 | Revision instructions MUST be stored per draft (revision number, instruction text) — alongside edit diffs, they are input to profile refinement (FR-6.10, FR-7.9). | MUST |
+| DR-9.13 | The database MUST store operational switch state (FR-15.12–15.14) and an append-only audit of every change: flag, previous value, new value, acting admin, timestamp. Audit rows are never deleted — user erasure (FR-2.6) is refused for a user those rows name as the acting admin. | MUST |
+| DR-9.14 | The database MUST store each draft's **derivatives individually** — kind (hero image, X.com, LinkedIn, translation), content or asset reference, and an outcome of `produced` / `skipped` / `failed` with a human-readable reason. A draft-level blob is not sufficient: FR-15.13 requires per-derivative outcomes, the review screen renders them separately, and the revision loop (FR-7.9) regenerates them one at a time. | MUST |
+| DR-9.15 | Each stored profile payload MUST carry the **schema version it was written against**. Profiles are append-only (DR-9.1) and pipeline runs pin a version, so a schema change must leave historic versions readable rather than unparseable. | MUST |
+| DR-9.16 | The database MUST store **QC results per draft per revision** (§17): check id, class, verdict, human-readable finding, and — for judged checks — the provider/model that produced the verdict. Results are retained with the draft so a rejection can be traced to what QC did or did not catch. | MUST |
 
 ---
 
@@ -253,7 +259,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 |----|----------|---------|---------------------|
 | **OD-1** | ~~Permanently two users, or prototype for multi-tenant product?~~ **RESOLVED (2026-07-12): prototype, expected to grow to multi-user soon.** | FR-2.x, tenancy, auth | Design must be N-user-ready from day one (FR-2.4); full tenancy infrastructure deferred. |
 | **OD-2** | ~~Discovery approach: LLM-with-web-search vs purpose-built APIs~~ **RESOLVED (2026-07-12): LLM with web search.** | FR-5.4 | Dedicated APIs remain a later fallback if quality disappoints (FR-5.6). |
-| **OD-3** | ~~Language strategy~~ **RESOLVED (2026-07-12): per-user profile setting — Arabic, English, or bilingual; nothing hard-coded.** | FR-3.7, FR-6.4 | Claude's Arabic strength remains relevant to model choice (OD-8). |
+| **OD-3** | ~~Language strategy~~ ~~RESOLVED (2026-07-12): per-user profile setting — Arabic, English, or bilingual~~ **REVISED (2026-08-21): two independent per-user settings — a primary language the article is generated in (Arabic or English), and an opt-in translation preference naming a target language.** Nothing hard-coded. | FR-3.7, FR-3.13, FR-6.4, FR-6.14 | The single "bilingual" value conflated two choices and left the generation language implicit even though FR-6.14 depended on it. Existing profiles migrate with the primary language stated explicitly, never inferred — decided 2026-08-21: both users are `en` with translation off. Claude's Arabic strength remains relevant to model choice (OD-8). |
 | **OD-4** | ~~Approval-required vs fully automatic — per user~~ **RESOLVED (2026-07-12): approval required for both users initially; per-user flag allows relaxing the tech user later.** | FR-7.1 | Medical approval is permanently mandatory (FR-7.2). |
 | **OD-5** | ~~Hosting target: Azure vs cheaper VPS~~ **RESOLVED (2026-07-12): Cloudflare Workers, backend rewritten in TypeScript.** | §10, NFR-11.2, NFR-11.3 | User's websites already run on Workers; single-platform operations preferred. C# on Cloudflare evaluated and rejected (Pages supports only client-side Blazor WASM; Containers is beta). |
 | **OD-6** | ~~Could medical content ever reference real cases / institutional info?~~ **RESOLVED (2026-07-13): never — strictly educational/general.** | FR-3.9, FR-6.8 | Case/patient/institutional references hard-banned in guardrails and on the approval screen. |
@@ -275,6 +281,8 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | **OD-22** | **RESOLVED (2026-07-13): AI disclosure = per-profile flag, default OFF.** | FR-6.18 | — |
 | **OD-23** | **RESOLVED (2026-07-13): user-requested topics supported** — a targeted-research entry into the same pipeline. Compliance guardrails always apply; banned-topic collisions warn with explicit override; dedup informs but doesn't block; the pending-drafts gate is bypassed; budget caps never are; the user picks the angle. | FR-5.8, FR-7.7, FR-6.3 | — |
 | **OD-24** | **RESOLVED (2026-07-13): draft discard & revision loop** — reject captures a reason category (quality / changed-mind / other), deletes the Sanity draft, purges markdown; scheduled publishes are cancellable; request-revision regenerates with user instructions (≤3 per draft, metered, instructions feed refinement); change-angle reruns from a stored proposal. | FR-7.8–7.9, DR-9.12 | Discards still count toward the 30-day dedup. |
+| **OD-26** | **RESOLVED IN SHAPE (2026-08-21): an automated QC layer runs between generation and human review** — deterministic checks plus a routed LLM judge, hard findings trigger one regeneration then flag for review, soft findings annotate only, and the whole stage degrades to deterministic-only rather than blocking. **Deferred to Phase 5 design:** score thresholds, the final check catalogue, and the judge prompt. | §17, FR-17.1–17.10, DR-9.16 | Deliberately advisory-by-default: with mandatory human approval (FR-7.1–7.2) a blocking QC layer would add an outage surface without adding a safeguard. Its value rises if the tech user ever moves to `auto_publish` (OD-4), which FR-17.1 anticipates. |
+| **OD-25** | **RESOLVED (2026-08-21): operational control = three independent kill switches enforced at their point of effect** — AI paused (pre-call gate), publishing paused (publish step), runs paused (run entry) — plus reversible per-user suspend, typed flag storage with change audit, and skip-not-fail behaviour when an optional task type has no enabled route. A single pipeline-level flag checked only at run entry was **rejected**: the approval wait means a run can begin before a pause and publish days after it. | FR-2.7, FR-15.12–15.14, DR-9.13 | These are operational controls, not product feature flags. Per-capability disable rides on the existing `ai_routes.enabled` (FR-15.3) rather than introducing a second mechanism. |
 
 ---
 
@@ -284,14 +292,22 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 
 ### Phase 1 — Manual pipeline, one user (2–3 weeks)
 - Backend only; no Flutter.
-- Hard-code the tech user's profile.
+- Hard-code the tech user's profile — including an explicit **primary language** and translation preference (FR-3.7, FR-3.13); neither may be left implicit now that translation is opt-in.
 - Trigger the pipeline via an endpoint.
 - Publish drafts to Sanity; review in Sanity Studio.
+- **AI-paused kill switch only** (FR-15.12a), enforced in the pre-call gate. Pulled forward from Phase 2: once a Worker is deployed and spending against the global cap, a stop button that also halts in-flight runs is operational hygiene, not admin tooling. The publishing and runs switches stay in Phase 2 with the rest of the surface.
 - **Exit criterion:** discovery quality and voice matching validated.
 
 ### Phase 2 — Approval loop + Flutter shell
 - Basic app: login, drafts queue, approve/edit/reject.
 - Add the second (medical) user with a hand-written profile and the medical guardrails (FR-6.6–6.8, FR-7.2).
+- **Admin API**: routing CRUD, route tests, health, per-user limits, monitor, budget, user list/create/delete (§7 admin routes, FR-15.3/15.5/15.8/15.10–15.11, FR-2.5–2.6).
+- **Admin web dashboard v1** (OD-17) — the surface for everything above.
+- **Operational kill switches, full set** (FR-15.12): publishing-paused at the publish step and runs-paused at run entry join the AI switch shipped in Phase 1; all three visible in monitoring.
+- **Typed flag store + change audit** (FR-15.14, DR-9.13): declared flag set, defaults in code, DB overrides, append-only audit of who changed what and when.
+- **Per-user suspend/reactivate** (FR-2.7) — reversible, distinct from deletion.
+- **Skip-not-fail for optional task types** (FR-15.13), including the requested-but-unroutable translation path.
+- **Per-draft translation override** on the review screen (FR-6.14) — request one when the profile has translation off, skip one when it is on.
 
 ### Phase 3 — Conversational onboarding
 - Build the chat-driven profile builder (§4).
@@ -302,6 +318,13 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 - Push notifications on new drafts.
 - Edit-diff capture and profile refinement (FR-6.9–6.10).
 - Small metrics view: topics surfaced, approval rate, edit distance.
+
+### Phase 5 — Automated QC *(planned — §17)*
+- Deterministic check suite, shared with the golden-set regression (FR-17.9, NFR-16.1).
+- `qc_review` task type + routed judge, defaulting to a different provider than the article route (FR-17.6, FR-17.8).
+- QC stage in the Workflow, regenerate-once on hard fail (FR-17.4), advisory annotations on the review screen (FR-17.5).
+- QC panel in admin monitoring (FR-17.10).
+- **Entry criterion:** enough reviewed drafts to know which failures actually recur — building the catalogue before that is guesswork.
 
 ---
 
@@ -317,6 +340,7 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 - Voice narration, video, and code-snippet generation as product features — routing-ready task types only (FR-6.15).
 - Publishing directly to X.com — v1 generates the short text only (FR-6.12).
 - Per-user provider API keys (BYOK) — platform keys only (OD-14).
+- Duplicating published post bodies in the application database (DR-9.6).
 
 ---
 
@@ -337,6 +361,9 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 | FR-15.9 | Provider API keys are **platform-owned**: one set per provider, stored as server-side secrets (NFR-11.1/11.2). Users never supply or see keys. | MUST |
 | FR-15.10 | A **global budget hard cap** MUST be enforced in the application itself (not only at the gateway): when global month-to-date spend reaches the ceiling (NFR-11.5), ALL AI calls are refused — pipelines, derivatives, health canaries, everything — with a human-readable error, and the admin is notified. The AI Gateway cap remains the outer backstop. Alerts fire at 80% and 100% of the global cap. | MUST |
 | FR-15.11 | **Global monitoring** MUST be available to the admin: month-to-date and daily spend broken down by user, provider, and task type; cap status (global and per user); route health overview; and pipeline run success/failure rates. Threshold breaches and route failures MUST push notifications — monitoring is active, not just a dashboard to remember to check. | MUST |
+| FR-15.12 | The system MUST provide **operational kill switches**, each enforced at its point of effect rather than at pipeline entry — a run may wait at the approval gate for days after it starts, so an entry-only check leaves the expensive and irreversible steps uncovered: **(a) AI paused** — refuses every AI call in the pre-call gate, halting in-flight runs as well as new ones; **(b) publishing paused** — refuses any write to Sanity at the point of publish; **(c) runs paused** — prevents new pipeline runs from starting, without disturbing runs already under way. Each switch is independent, refuses with a human-readable reason (never a silent skip), and takes effect without redeploy. Explicitly admin-triggered route tests bypass (a), as they do the global cap (FR-15.10). **[OD-25 — resolved]** | MUST |
+| FR-15.13 | Disabling every enabled route for a task type MUST **disable that capability, not break the pipeline**: for optional derivative task types (hero image, channel shortening) the pipeline MUST skip the derivative, record the skip on the run, and continue to a publishable draft; for task types required to produce a draft (article generation) it MUST fail the run with a message naming the task type. **Translation is neither**: when the user has asked for one (FR-3.13) and no route can serve it, the draft MUST still be delivered for review with the translation marked failed and the reason surfaced — a requested deliverable may not be silently dropped, but nor may its absence discard a good article. Per-route enable/disable (FR-15.3) remains the mechanism — this requirement governs the pipeline's response to it. | MUST |
+| FR-15.14 | Operational switches MUST be **typed and validated** rather than free-form key-value rows: a declared flag set with defaults in code and database rows as overrides, so an unknown or malformed flag cannot silently alter behaviour. Every change MUST be audited (DR-9.13), and the current state of all switches MUST be visible in admin monitoring (FR-15.11) — a switch that is on but invisible is an outage waiting to be misdiagnosed. | MUST |
 
 ---
 
@@ -344,7 +371,33 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| NFR-16.1 | Automated tests MUST cover the modules (unit tests on the Workers test pool) and the API routes (integration tests). Prompt changes MUST pass a small **golden-set regression** (recorded inputs → asserted outputs, e.g. "contains disclaimer block", "X version ≤ 280 chars") before deploy. | MUST |
+| NFR-16.1 | Automated tests MUST cover the modules (unit tests on the Workers test pool) and the API routes (integration tests). Database-backed tests MUST run against real PostgreSQL — an in-process PGlite instance built from the committed migrations, never a mock or a stubbed query builder, so constraint and enum behaviour is exercised rather than assumed. Prompt changes MUST pass a small **golden-set regression** (recorded inputs → asserted outputs, e.g. "contains disclaimer block", "X version ≤ 280 chars") before deploy. | MUST |
 | NFR-16.2 | CI/CD via GitHub Actions: merges deploy to a **staging** Worker (drafts-only Sanity access per FR-8.5, staging DB branch); production deploys are explicit (tag or manual approval). DB migrations run in CI — never by hand against production. | MUST |
 | NFR-16.3 | Backups: point-in-time recovery enabled on the managed Postgres; weekly automated Sanity dataset export; the restore procedure documented and rehearsed once before Phase 2 exit. | MUST |
-- Duplicating published post bodies in the application database (DR-9.6).
+
+---
+
+## 17. Content Quality Control (FR-17) — *planned, Phase 5*
+
+> Added 2026-08-21 (OD-26). **This section is a plan, not a completed design.** The shape below is
+> decided; thresholds, the check catalogue's final contents, and the judge prompt are deferred to
+> Phase 5 design. Nothing here is built in Phases 1–4.
+>
+> **Why it exists:** every quality gate today is a human reading a draft. That is sound for two
+> users and mandatory for the medical one (FR-7.2), but it scales badly, it catches structural
+> faults late, and it puts the reviewer in the position of fact-checking source links by hand.
+> QC automates what a machine can check so the human attention goes where only human attention
+> works.
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-17.1 | A **QC stage** MUST run between generation and human review, on the article and every derivative, before a draft enters `pending_approval`. It MUST NOT be skippable by the `auto_publish` path (OD-4) — an auto-publishing user is precisely the case with no human backstop. | MUST |
+| FR-17.2 | QC MUST comprise two classes: **deterministic checks** (no model call — length, structure, channel character limits, disclaimer presence, banned-term scan, output language matches `primaryLanguage`, every Sources link present in the topic brief, verbatim-overlap against fetched sources per FR-6.17, Portable-Text convertibility per FR-8.3) and **judged checks** (a model call — voice match against the profile and few-shot examples, claim-to-source support, semantic medical-guardrail review, translation fidelity). | MUST |
+| FR-17.3 | Each check MUST yield `pass`, `warn`, or `fail`, and each MUST declare itself **hard** or **soft**. Hard: medical guardrail breach, banned-topic collision, fabricated source link, verbatim reproduction. Soft: everything else. | MUST |
+| FR-17.4 | On a **hard fail** the pipeline MUST regenerate once, appending the QC findings to the generation prompt. If the regeneration also hard-fails, the draft MUST still reach human review, flagged with the unresolved findings — never silently discarded, and never auto-published regardless of `auto_publish`. Discarding a draft hides the failure mode from the only person who can correct the profile or the prompt. | MUST |
+| FR-17.5 | **Soft** findings MUST surface on the review screen as advisory annotations and MUST NOT block approval. The reviewer, not QC, decides whether a soft finding matters. | MUST |
+| FR-17.6 | Judged checks MUST run through the AI Router as their own task type (`qc_review`), metered per user (FR-15.7) and subject to every gate and switch (FR-15.8, FR-15.10, FR-15.12). | MUST |
+| FR-17.7 | QC MUST **degrade rather than block** (consistent with FR-15.13): if no route can serve `qc_review`, or the global cap or `ai.paused` refuses it, the deterministic checks still run, the judged checks record as `skipped` with the reason, and the draft proceeds to review. A QC layer that can halt the pipeline is a new outage source. | MUST |
+| FR-17.8 | The judged checks SHOULD default to a **different provider than the one that generated the article**. A model grading its own output is the weakest form of this check, and the multi-provider router (FR-15.1) already makes the alternative free to configure. | SHOULD |
+| FR-17.9 | Deterministic checks MUST be written as pure functions reusable by the golden-set regression (NFR-16.1), so a check is defined once and serves both deploy-time prompt testing and run-time QC. | MUST |
+| FR-17.10 | QC results MUST be visible in admin monitoring (FR-15.11): pass/warn/fail rates by check over time. A check that never fires and one that always fires are both signals — the first is dead weight, the second is a prompt problem. | SHOULD |

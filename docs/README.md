@@ -11,11 +11,11 @@ Spec: [docs/requirement.md](docs/requirement.md) · Design: [docs/design.md](doc
 
 | Path | What |
 |---|---|
-| `apps/backend` | Cloudflare Worker — Hono API, Workflows pipeline, AI router, Drizzle/Postgres |
-| `apps/mobile` | Flutter app (users) |
-| `apps/admin` | Admin web dashboard (routing config, monitoring, budgets) |
-| `packages/shared` | Zod schemas + shared TS types (profile, task types) |
-| `tools/` | Seed scripts, evals, run helpers |
+| `codebase/apps/backend` | Cloudflare Worker — Hono API, Workflows pipeline, AI router, Drizzle/Postgres |
+| `codebase/apps/mobile` | Flutter app (users) |
+| `codebase/apps/admin` | Admin web dashboard (routing config, monitoring, budgets) |
+| `codebase/packages/shared` | Zod schemas + shared TS types (profile, task types) |
+| `codebase/tools/` | Seed scripts, evals, run helpers |
 | `docs/` | Requirements, design, runbook |
 
 Sanity Studio (post/author schemas) lives in the existing sites' repo — not here.
@@ -23,11 +23,12 @@ Sanity Studio (post/author schemas) lives in the existing sites' repo — not he
 ## Dev
 
 ```sh
+cd codebase
 pnpm install
 pnpm typecheck
 pnpm dev                    # backend on wrangler dev
 tools/run-web.sh            # Flutter web on Chrome, pinned to port 8090
 ```
 
-Secrets: never committed. Local dev uses `apps/backend/.dev.vars` (gitignored) — copy
+Secrets: never committed. Local dev uses `codebase/apps/backend/.dev.vars` (gitignored) — copy
 `.dev.vars.example` and fill in values. Production uses `wrangler secret put`.
