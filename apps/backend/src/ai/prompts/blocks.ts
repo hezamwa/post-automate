@@ -5,16 +5,13 @@ import type { Profile } from "@post-automate/shared";
 
 export const PROMPT_VERSION = "v1";
 
-/** Bilingual profiles write the primary article in Arabic; translation is a separate task (FR-6.14). */
-export function primaryLanguage(profile: Profile): "ar" | "en" {
-  return profile.language === "en" ? "en" : "ar";
-}
-
-const LANGUAGE_NAMES = { ar: "Arabic", en: "English" } as const;
+// FR-3.7 (OD-3 revised): the generation language is profile.primaryLanguage, explicit
+// per user — never derived. Translation is a separate, opt-in task (FR-3.13, FR-6.14).
+export const LANGUAGE_NAMES = { ar: "Arabic", en: "English" } as const;
 
 export function editorialRules(profile: Profile): string {
   const words = profile.format?.targetWords ?? 1200;
-  const lang = LANGUAGE_NAMES[primaryLanguage(profile)];
+  const lang = LANGUAGE_NAMES[profile.primaryLanguage];
   return [
     `You write long-form blog articles published under the name ${profile.identity.displayName}.`,
     `- Write in Markdown (no front-matter). Target ~${words} words.`,

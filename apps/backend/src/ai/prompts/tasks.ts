@@ -1,8 +1,8 @@
-import type { Profile } from "@post-automate/shared";
+import type { Language, Profile } from "@post-automate/shared";
 import {
   audienceBlock,
   guardrailsBlock,
-  primaryLanguage,
+  LANGUAGE_NAMES,
   voiceBlock,
 } from "./blocks";
 
@@ -200,20 +200,21 @@ Sources: ${topic.sourceUrls.join(", ")}`;
 export function shortenXPrompt(profile: Profile): string {
   return [
     voiceBlock(profile),
-    `Compress the article below into ONE X.com post: MAXIMUM 280 characters including hashtags (hashtag policy: ${profile.voice.hashtagPolicy}). Language: ${primaryLanguage(profile)}. Keep the hook, drop the detail, end with value — no clickbait. Reply with the post text only.`,
+    `Compress the article below into ONE X.com post: MAXIMUM 280 characters including hashtags (hashtag policy: ${profile.voice.hashtagPolicy}). Language: ${profile.primaryLanguage}. Keep the hook, drop the detail, end with value — no clickbait. Reply with the post text only.`,
   ].join("\n\n");
 }
 
 export function shortenLinkedInPrompt(profile: Profile): string {
   return [
     voiceBlock(profile),
-    `Rewrite the article below as ONE LinkedIn post (max 3000 characters; professional register; language: ${primaryLanguage(profile)}). Structure: a strong first line (it shows before "see more"), 2-4 short paragraphs of substance, a closing line inviting the full read. At most 3 hashtags. Reply with the post text only.`,
+    `Rewrite the article below as ONE LinkedIn post (max 3000 characters; professional register; language: ${profile.primaryLanguage}). Structure: a strong first line (it shows before "see more"), 2-4 short paragraphs of substance, a closing line inviting the full read. At most 3 hashtags. Reply with the post text only.`,
   ].join("\n\n");
 }
 
-export function translatePrompt(profile: Profile): string {
-  const target = primaryLanguage(profile) === "ar" ? "English" : "Arabic";
-  return `Translate the article below into ${target}. Preserve the Markdown structure, tone, and the meaning of any disclaimer block exactly. Do not add or remove claims. Reply with the translated Markdown only.`;
+// FR-6.14: the target comes from profile.translation.targetLanguage — or, for the
+// Phase-2 per-draft override, from the request — never inferred from primaryLanguage.
+export function translatePrompt(targetLanguage: Language): string {
+  return `Translate the article below into ${LANGUAGE_NAMES[targetLanguage]}. Preserve the Markdown structure, tone, and the meaning of any disclaimer block exactly. Do not add or remove claims. Reply with the translated Markdown only.`;
 }
 
 export function imagePrompt(headline: string, profile: Profile): string {

@@ -1,7 +1,9 @@
 // Drizzle schema — design §3. Every user-owned table carries user_id (FR-2.3).
 // Sanity is the source of truth for content; this DB owns pipeline state (§9 of requirements).
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   integer,
   jsonb,
   numeric,
@@ -51,6 +53,10 @@ export const healthStatus = pgEnum("health_status", [
   "timeout",
   "provider_error",
 ]);
+export const configSource = pgEnum("config_source", ["admin", "seed", "migration"]);
+export const derivativeKind = pgEnum("derivative_kind", ["hero_image", "x", "linkedin", "translation"]);
+export const derivativeOutcome = pgEnum("derivative_outcome", ["produced", "skipped", "failed"]);
+export const blogType = pgEnum("blog_type", ["public", "em"]);
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -65,6 +71,22 @@ export const users = pgTable("users", {
   sanityDataset: text("sanity_dataset").notNull().default("production"),
   // Per-user approval flag (FR-7.1); the medical user must stay false (FR-7.2 — app invariant + seed)
   autoPublish: boolean("auto_publish").notNull().default(false),
+  // NULL = active. Reversible suspend (FR-2.7) — an account state, NOT a $0 spend cap:
+  // refused at login/refresh with the reason, and in the AI/run gates (design §10.1)
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedReason: text("suspended_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Long-lived refresh tokens, stored hashed (design §2, FR-2.2). Rotated on every use;
+// a revoked or expired token is refused. (Table shape not specified in design §3 —
+// minimal implementation of §2's "refresh token stored hashed in the DB".)
+export const refreshTokens = pgTable("refresh_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  tokenHash: text("token_hash").notNull().unique(), // SHA-256 of the opaque token
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }), // set on rotation/logout
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -77,6 +99,9 @@ export const profiles = pgTable(
     version: integer("version").notNull(),
     status: profileStatus("status").notNull().default("draft"),
     payload: jsonb("payload").notNull(), // validated against @post-automate/shared profileSchema (§4)
+    // The SHAPE of payload (DR-9.15), distinct from `version` (the user's edit history).
+    // Writes set PROFILE_SCHEMA_VERSION explicitly; see design §4 "Schema evolution".
+    schemaVersion: integer("schema_version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("profiles_user_version").on(t.userId, t.version)],
@@ -101,6 +126,10 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   profileVersion: integer("profile_version").notNull(),
   trigger: runTrigger("trigger").notNull().default("cron"), // FR-5.8
   userTopic: jsonb("user_topic"), // {title, notes?, links?} for user_topic runs
+  // {angles: Angle[3], recommendedIndex} — written by the angles step so the app can
+  // render the picker for user-requested runs (FR-6.3) and change-angle (FR-7.9 names
+  // "stored angle proposals"; design §3 never gave them a home — this is it)
+  angleProposals: jsonb("angle_proposals"),
   state: runState("state").notNull().default("discovering"), // DR-9.4
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
@@ -134,10 +163,34 @@ export const drafts = pgTable("drafts", {
   status: draftStatus("status").notNull().default("pending_approval"),
   rejectionCategory: rejectionCategory("rejection_category"), // FR-7.8
   publishMode: publishMode("publish_mode"), // FR-7.5
+  // Afnan's site only (design §8): chosen per draft at approval (decided 2026-08-21);
+  // the Sanity draft carries a provisional "public" until then. NULL = site has no blogType.
+  blogType: blogType("blog_type"),
   publishAt: timestamp("publish_at", { withTimezone: true }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// One row per derivative per revision, not a draft-level blob (DR-9.14): FR-15.13 needs
+// per-kind outcomes, the review screen renders them separately, and revisions replace
+// them one at a time. `skipped` (capability disabled — no enabled route) and `failed`
+// (asked for, didn't arrive) are distinct and MUST render differently; a derivative the
+// profile never asked for gets NO row at all (design §5: absent, not skipped).
+export const draftDerivatives = pgTable(
+  "draft_derivatives",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id").notNull().references(() => drafts.id),
+    kind: derivativeKind("kind").notNull(),
+    outcome: derivativeOutcome("outcome").notNull(),
+    content: text("content"), // x/linkedin/translation text when produced
+    assetRef: text("asset_ref"), // Sanity asset id for hero_image
+    reason: text("reason"), // why skipped/failed — human-readable
+    revisionNo: integer("revision_no").notNull().default(0), // re-derived per revision (FR-7.9)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("draft_derivatives_draft_kind_rev").on(t.draftId, t.kind, t.revisionNo)],
+);
 
 // Revision instructions feed profile refinement like edit diffs (FR-7.9, DR-9.12)
 export const draftRevisions = pgTable("draft_revisions", {
@@ -198,13 +251,33 @@ export const aiHealthChecks = pgTable("ai_health_checks", {
   checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Small key-value store for admin-mutable app settings — currently the global
-// monthly cap (FR-15.10, PATCH /admin/budget)
+// Admin-mutable scalar settings: the global cap AND the operational switches (design
+// §10.1). Rows are OVERRIDES only — every key's default and type live in
+// src/shared/flags.ts, so a missing row is normal (FR-15.14).
 export const appConfig = pgTable("app_config", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Append-only audit of every config change — never updated or deleted (DR-9.13). Covers
+// the budget cap as well as the switches: raising a cap deserves a trail too.
+export const appConfigAudit = pgTable(
+  "app_config_audit",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    oldValue: jsonb("old_value"), // NULL on the first write for a key (no prior row)
+    newValue: jsonb("new_value").notNull(),
+    changedBy: uuid("changed_by").references(() => users.id),
+    source: configSource("source").notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // changed_by is NULL exactly when source != 'admin' (seeds and migrations have no
+  // acting admin); `source` keeps that explicit rather than leaving a bare NULL to
+  // be interpreted (design §3)
+  (t) => [check("app_config_audit_actor", sql`(${t.source} = 'admin') = (${t.changedBy} IS NOT NULL)`)],
+);
 
 // Per-user caps (FR-15.8, DR-9.10); global cap lives in app_config (FR-15.10)
 export const userLimits = pgTable("user_limits", {

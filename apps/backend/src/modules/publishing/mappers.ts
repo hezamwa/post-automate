@@ -2,7 +2,6 @@
 // the pipeline satisfies each site's required fields. Adding a site = adding a mapper.
 import type { Profile } from "@post-automate/shared";
 import { PROMPT_VERSION } from "../../ai/prompts/blocks";
-import { primaryLanguage } from "../../ai/prompts/blocks";
 import type { Article, DerivedTexts } from "../generation";
 import { markdownToPortableText } from "./portable-text";
 
@@ -35,7 +34,7 @@ export function mapToWaleedPost(input: MapperInput): Record<string, unknown> {
     _type: "post",
     title: article.title,
     slug: { _type: "slug", current: article.slug },
-    language: primaryLanguage(profile),
+    language: profile.primaryLanguage,
     ...(input.imageAssetId
       ? { image: { _type: "image", asset: { _type: "reference", _ref: input.imageAssetId }, alt: article.imageAlt } }
       : {}),
@@ -59,7 +58,7 @@ export function mapToAfnanBlogPost(input: MapperInput): Record<string, unknown> 
     blogType: input.blogType ?? "public",
     title: article.title,
     slug: { _type: "slug", current: article.slug },
-    language: primaryLanguage(profile),
+    language: profile.primaryLanguage,
     publishDate: new Date().toISOString(),
     ...(input.imageAssetId
       ? {
