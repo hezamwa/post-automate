@@ -21,6 +21,7 @@ export default defineConfig({
               // workerd catches up.
               compatibilityDate: "2025-10-11",
               compatibilityFlags: ["nodejs_compat"],
+              r2Buckets: ["BACKUPS"], // backup.test.ts writes to a real (miniflare) R2 bucket
             },
           }),
         ],

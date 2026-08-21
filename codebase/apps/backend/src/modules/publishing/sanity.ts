@@ -10,12 +10,13 @@ export interface SanityTarget {
   dataset: string;
 }
 
-function token(env: Env, projectId: string): string {
+export function sanityToken(env: Env, projectId: string): string {
   const name = `SANITY_TOKEN_${projectId.toUpperCase()}`;
   const value = (env as unknown as Record<string, string | undefined>)[name];
   if (!value) throw new Error(`Missing secret ${name} for Sanity project ${projectId} (FR-8.4)`);
   return value;
 }
+const token = sanityToken;
 
 async function sanityFetch(env: Env, t: SanityTarget, path: string, init: RequestInit): Promise<unknown> {
   const res = await fetch(`https://${t.projectId}.api.sanity.io/${API_VERSION}${path}`, {

@@ -110,6 +110,14 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
   };
 }
 
+/** Distinct creator Sanity projects — the weekly backup exports each once (NFR-16.3). */
+export async function distinctSanityTargets(db: Db): Promise<{ projectId: string; dataset: string }[]> {
+  const rows = await db
+    .selectDistinct({ projectId: schema.users.sanityProjectId, dataset: schema.users.sanityDataset })
+    .from(schema.users);
+  return rows.filter((r): r is { projectId: string; dataset: string } => r.projectId != null);
+}
+
 export async function listRoutes(db: Db) {
   return db
     .select()

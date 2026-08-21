@@ -2,6 +2,7 @@ export interface Env {
   // Bindings
   PIPELINE: Workflow;
   DB?: Hyperdrive; // absent in local dev — DATABASE_URL is used instead
+  BACKUPS?: R2Bucket; // weekly Sanity export destination (NFR-16.3); absent until R2 is enabled
   ENVIRONMENT: "development" | "staging" | "production";
 
   // Secrets (wrangler secret put / .dev.vars) — platform-owned, FR-15.9

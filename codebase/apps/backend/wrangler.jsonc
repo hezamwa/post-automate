@@ -12,7 +12,7 @@
   ],
   "triggers": {
     // 06:00 UTC daily dispatcher (per-user cadence in data, FR-3.6) + hourly publisher (FR-7.5)
-    "crons": ["0 6 * * *", "0 * * * *"]
+    "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"]
   },
   "vars": { "ENVIRONMENT": "development" },
 
@@ -25,7 +25,10 @@
         { "name": "pipeline-staging", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
       ],
       "hyperdrive": [{ "binding": "DB", "id": "27ca81d3c2bd45dcb76eafc2917bb0ab" }],
-      "triggers": { "crons": ["0 6 * * *", "0 * * * *"] }
+      // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
+      // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
+      // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"] }
     },
     "production": {
       "vars": { "ENVIRONMENT": "production" },
@@ -34,7 +37,10 @@
       ],
       // TODO: dedicated production Neon branch + its own Hyperdrive config before go-live
       "hyperdrive": [{ "binding": "DB", "id": "27ca81d3c2bd45dcb76eafc2917bb0ab" }],
-      "triggers": { "crons": ["0 6 * * *", "0 * * * *"] }
+      // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
+      // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
+      // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"] }
     }
   }
 }

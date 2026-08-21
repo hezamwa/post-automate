@@ -6,6 +6,7 @@ import { createDb, schema, type Db } from "./db/client";
 import { createRun, getUserById, setRunState } from "./db/commands";
 import { getActiveProfile } from "./modules/profiles";
 import { publishApprovedDraft } from "./modules/publishing";
+import { backupSanityDatasets } from "./shared/backup";
 import type { Env } from "./shared/env";
 import { getFlags } from "./shared/flags";
 import { notifyUser } from "./shared/notify";
@@ -114,6 +115,9 @@ export default {
         break;
       case "0 * * * *":
         ctx.waitUntil(hourlyPublish(env, db));
+        break;
+      case "0 3 * * 0": // weekly Sanity dataset export → R2 (NFR-16.3)
+        ctx.waitUntil(backupSanityDatasets(env, db));
         break;
     }
   },

@@ -182,6 +182,22 @@ describe("monitorSnapshot (FR-15.11)", () => {
   });
 });
 
+describe("distinctSanityTargets (NFR-16.3)", () => {
+  it("returns each creator project once, skipping users without one", async () => {
+    const { distinctSanityTargets } = await import("../../src/db/queries");
+    await seedUser(db); // harness default: test000/production
+    await seedUser(db); // same project — must not duplicate
+    await db.insert(schema.users).values({
+      email: `np-${crypto.randomUUID()}@example.com`,
+      displayName: "No Project",
+      passwordHash: "x",
+      sanityProjectId: null,
+    });
+    const targets = await distinctSanityTargets(db);
+    expect(targets).toEqual([{ projectId: "test000", dataset: "production" }]);
+  });
+});
+
 describe("upsertUserLimits (FR-15.8)", () => {
   it("patches only the provided fields and creates the row on first change", async () => {
     const userId = await seedUser(db); // harness seeds a limits row with defaults
