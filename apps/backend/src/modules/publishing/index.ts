@@ -2,7 +2,10 @@
 // Content truth lives in Sanity; this DB keeps pointers only (DR-9.6).
 import { eq } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
+import { GateError } from "../../ai/gates";
+import { NoRouteError } from "../../ai/router";
 import { schema, type Db } from "../../db/client";
+import { getFlags } from "../../shared/flags";
 import type { Env } from "../../shared/env";
 import { generateHeroImage, type Article, type DerivedTexts } from "../generation";
 import { mapForProject, type MapperInput } from "./mappers";
@@ -57,18 +60,32 @@ export async function createSanityDraft(
     /** Revisions keep the existing hero unless instructions address it (FR-7.9). */
     existingImageAssetId?: string;
   },
-): Promise<{ sanityDocId: string; imageAssetId?: string }> {
+): Promise<{
+  sanityDocId: string;
+  imageAssetId?: string;
+  /** DR-9.14 outcome for the hero_image row — recorded by the pipeline's record step. */
+  heroOutcome: { outcome: "produced" | "skipped" | "failed"; assetRef?: string; reason?: string };
+}> {
   const target = targetOf(args.user);
 
   let imageAssetId = args.existingImageAssetId;
+  // Revisions keep the image unless instructions address it (FR-7.9) — still `produced`.
+  let heroOutcome: { outcome: "produced" | "skipped" | "failed"; assetRef?: string; reason?: string } =
+    imageAssetId ? { outcome: "produced", assetRef: imageAssetId } : { outcome: "failed" };
   if (!imageAssetId) {
     try {
       const hero = await generateHeroImage(env, db, { userId: args.user.id, runId: args.runId, profile: args.profile }, args.article);
       imageAssetId = await uploadImageAsset(env, target, hero.imageBase64, hero.mimeType, `${args.article.slug}-hero.png`);
+      heroOutcome = { outcome: "produced", assetRef: imageAssetId };
     } catch (e) {
-      // A missing hero image should not kill the run — the reviewer sees it's absent (FR-6.13
-      // is satisfied on revise/regenerate); the failure is already in ai_health_checks.
-      console.warn("hero image generation/upload failed — draft continues without image:", e instanceof Error ? e.message : e);
+      if (e instanceof GateError) throw e; // ai.paused/caps halt the step (FR-15.12a), not degrade
+      // Skip-not-fail (FR-15.13): a missing hero image never kills the run — the reviewer
+      // sees WHY it is absent (DR-9.14): capability disabled = skipped; tried and lost = failed.
+      heroOutcome =
+        e instanceof NoRouteError
+          ? { outcome: "skipped", reason: "The 'image' capability is disabled — no enabled route (FR-15.13). Re-enable a route and revise the draft to generate it." }
+          : { outcome: "failed", reason: e instanceof Error ? e.message.slice(0, 300) : "unknown error" };
+      console.warn("hero image generation/upload failed — draft continues without image:", heroOutcome.reason);
     }
   }
 
@@ -88,7 +105,7 @@ export async function createSanityDraft(
   const sanityDocId = sanityDraftId(args.runId);
   await mutate(env, target, [{ createOrReplace: { ...doc, _id: sanityDocId } }]);
   await db.update(schema.drafts).set({ sanityDocumentId: sanityDocId }).where(eq(schema.drafts.id, args.draftId));
-  return { sanityDocId, imageAssetId };
+  return { sanityDocId, imageAssetId, heroOutcome };
 }
 
 /** Patch the article body on an existing Sanity draft (approve-with-edits, FR-6.9). */
@@ -110,6 +127,17 @@ export async function publishApprovedDraft(
   db: Db,
   args: { user: PublishTargetUser; draftId: string },
 ): Promise<string> {
+  // FR-15.12b: publishing paused — refused at the point of the Sanity write, the single
+  // choke point all three publish paths share (decision endpoint, Workflow publish step,
+  // hourly publisher). Drafting continues; NOTHING bypasses this switch (design §10.1).
+  const flags = await getFlags(db);
+  if (flags["publishing.paused"]) {
+    throw new GateError(
+      "publishing_paused",
+      "Publishing is paused by an administrator — no content will go live until it is resumed in admin settings (FR-15.12). The draft is unaffected and can be published after resuming.",
+    );
+  }
+
   const target = targetOf(args.user);
   const row = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, args.draftId) });
   if (!row?.sanityDocumentId) throw new Error(`Draft ${args.draftId} has no Sanity document`);
@@ -118,7 +146,17 @@ export async function publishApprovedDraft(
   const doc = await getDocument(env, target, row.sanityDocumentId);
   if (doc) {
     await mutate(env, target, [
-      { patch: { id: row.sanityDocumentId, set: { [dateField]: new Date().toISOString() } } },
+      {
+        patch: {
+          id: row.sanityDocumentId,
+          set: {
+            [dateField]: new Date().toISOString(),
+            // Afnan's site: the reviewer's per-draft public/em choice (design §8);
+            // the draft carried a provisional "public" until approval
+            ...(target.projectId === "5gz3ngjs" && row.blogType ? { blogType: row.blogType } : {}),
+          },
+        },
+      },
     ]);
   }
   const publishedId = await publishSanityDraft(env, target, row.sanityDocumentId);

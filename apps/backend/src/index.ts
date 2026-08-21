@@ -1,15 +1,28 @@
-import { and, eq, isNotNull, lte } from "drizzle-orm";
+import { and, eq, gte, isNotNull, lte } from "drizzle-orm";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { api } from "./api";
 import { createDb, schema, type Db } from "./db/client";
 import { createRun, getUserById, setRunState } from "./db/commands";
 import { getActiveProfile } from "./modules/profiles";
 import { publishApprovedDraft } from "./modules/publishing";
 import type { Env } from "./shared/env";
+import { getFlags } from "./shared/flags";
+import { notifyUser } from "./shared/notify";
 
 export { PipelineWorkflow } from "./workflows/pipeline";
 
 const app = new Hono<{ Bindings: Env }>();
+// CORS: only the Flutter web dev origin, and only outside production — native mobile
+// apps never preflight, and the deployed web/admin surfaces are served same-origin.
+app.use("*", async (c, next) => {
+  if (c.env.ENVIRONMENT === "production") return next();
+  return cors({
+    origin: "http://localhost:8090", // tools/run-web.sh — pinned web dev port
+    allowHeaders: ["authorization", "content-type"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE"],
+  })(c, next);
+});
 app.get("/health", (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }));
 app.route("/", api);
 
@@ -42,6 +55,28 @@ async function dailyDispatch(env: Env, db: Db): Promise<void> {
   await db
     .delete(schema.onboardingSessions)
     .where(and(isNotNull(schema.onboardingSessions.purgeAfter), lte(schema.onboardingSessions.purgeAfter, new Date())));
+
+  // design §9: "draft expiring in 24h" push — pending drafts in day 6 of their 7-day wait.
+  // Daily cadence means each draft lands in this window exactly once.
+  const sixDaysAgo = new Date(Date.now() - 6 * 24 * 3600_000);
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000);
+  const expiring = await db
+    .select({ id: schema.drafts.id, userId: schema.drafts.userId, runId: schema.drafts.runId })
+    .from(schema.drafts)
+    .where(
+      and(
+        eq(schema.drafts.status, "pending_approval"),
+        lte(schema.drafts.createdAt, sixDaysAgo),
+        gte(schema.drafts.createdAt, sevenDaysAgo),
+      ),
+    );
+  for (const d of expiring) {
+    await notifyUser(env, db, d.userId, {
+      title: "Draft expires in 24 hours",
+      body: "A draft has been waiting 6 days — review it before the 7-day timeout expires it.",
+      data: { draftId: d.id, runId: d.runId },
+    });
+  }
 }
 
 /** Hourly — publish scheduled drafts whose slot has arrived (FR-7.5). */
@@ -50,6 +85,12 @@ async function hourlyPublish(env: Env, db: Db): Promise<void> {
     .select()
     .from(schema.drafts)
     .where(and(eq(schema.drafts.status, "scheduled"), lte(schema.drafts.publishAt, new Date())));
+  // publishApprovedDraft is the authoritative publishing.paused check (FR-15.12b); this
+  // early exit only keeps a deliberate pause from logging as per-draft FAILURES each hour.
+  if (due.length > 0 && (await getFlags(db))["publishing.paused"]) {
+    console.log(`publisher: publishing.paused — ${due.length} due draft(s) held, will publish once resumed`);
+    return;
+  }
   for (const draft of due) {
     try {
       const user = await getUserById(db, draft.userId);

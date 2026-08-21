@@ -1,55 +1,50 @@
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { GateError } from "../ai/gates";
+import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
-import { getUserById, rejectDraft, scheduleDraft, setRunState } from "../db/commands";
+import { getUserById, rejectDraft, scheduleDraft, setDraftBlogType, setRunState } from "../db/commands";
+import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
+import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { computeNextSlot } from "../modules/publishing/schedule";
 import { deleteDraft, publishApprovedDraft, retractPublished } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
-import type { Env } from "../shared/env";
 import type { ApprovalEventPayload } from "../workflows/pipeline";
 
-// Design §7: drafts queue + decisions (FR-7.x). Auth lands in Phase 2 — until then the
-// mutating routes refuse in production and take ?email= in dev.
+// Design §7: drafts queue + decisions (FR-7.x). JWT-authenticated (FR-2.2); every
+// query is scoped to the authenticated user, and a foreign draft reads as 404 —
+// users only ever see and act on their own records (FR-2.3).
 
-function devOnly(env: Env): string | null {
-  return env.ENVIRONMENT === "production" ? "Requires auth (Phase 2) — refused in production" : null;
-}
-
-export const drafts = new Hono<{ Bindings: Env }>()
+export const drafts = new Hono<AuthedEnv>()
+  .use("*", requireAuth)
+  // Queue with per-draft derivative outcomes at the latest revision (DR-9.14) — the
+  // review screen renders each kind, including WHY one is skipped vs failed. Bodies
+  // are fetched live from Sanity (DR-9.6), never duplicated here.
   .get("/", async (c) => {
-    const email = c.req.query("email");
-    if (!email) return c.json({ error: "?email= required until Phase-2 auth" }, 400);
-    const db = createDb(c.env);
-    const user = await db.query.users.findFirst({ where: eq(schema.users.email, email) });
-    if (!user) return c.json({ error: "unknown user" }, 404);
-    const rows = await db
-      .select({
-        id: schema.drafts.id,
-        runId: schema.drafts.runId,
-        status: schema.drafts.status,
-        sanityDocumentId: schema.drafts.sanityDocumentId,
-        publishAt: schema.drafts.publishAt,
-        createdAt: schema.drafts.createdAt,
-        decidedAt: schema.drafts.decidedAt,
-      })
-      .from(schema.drafts)
-      .where(eq(schema.drafts.userId, user.id))
-      .orderBy(desc(schema.drafts.createdAt))
-      .limit(50);
+    const rows = await listDraftsWithDerivatives(createDb(c.env), c.get("userId"));
     return c.json({ drafts: rows });
+  })
+
+  // Review-screen detail: markdown (the app's editing source of truth until publish,
+  // DR-9.11), latest derivatives, and the run's stored angle proposals (FR-7.9).
+  // (§7's route table lacks a detail route — flagged as a doc gap.)
+  .get("/:id", async (c) => {
+    const detail = await getDraftDetail(createDb(c.env), c.get("userId"), c.req.param("id"));
+    if (!detail) return c.json({ error: "draft not found" }, 404);
+    return c.json(detail);
   })
 
   // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?,
   //  instructions?, angleIndex?, rejectionCategory?} (FR-7.5, FR-7.8-7.9)
   .post("/:id/decision", async (c) => {
-    const guard = devOnly(c.env);
-    if (guard) return c.json({ error: guard }, 501);
     const body = (await c.req.json().catch(() => ({}))) as ApprovalEventPayload;
     if (!["approve", "reject", "revise", "change_angle"].includes(body.action)) {
       return c.json({ error: "action must be approve|reject|revise|change_angle" }, 400);
     }
     const db = createDb(c.env);
-    const draft = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, c.req.param("id")) });
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
     if (!draft) return c.json({ error: "draft not found" }, 404);
     if (draft.status !== "pending_approval") {
       return c.json({ error: `draft is ${draft.status}, not pending_approval` }, 409);
@@ -76,12 +71,20 @@ export const drafts = new Hono<{ Bindings: Env }>()
     // Fallback (e.g. draft un-scheduled after its workflow completed): handle directly
     const user = await getUserById(db, draft.userId);
     if (body.action === "approve") {
+      if (body.blogType) await setDraftBlogType(db, draft.id, body.blogType);
       if (body.publishMode === "next_slot") {
+        // Scheduling is not a publish — allowed under publishing.paused; the hourly
+        // publisher holds it until the switch is resumed (FR-15.12b).
         const { profile } = await getActiveProfile(db, user.id);
         await scheduleDraft(db, draft.id, computeNextSlot(profile));
         await setRunState(db, draft.runId, "publishing");
       } else {
-        await publishApprovedDraft(c.env, db, { user, draftId: draft.id });
+        try {
+          await publishApprovedDraft(c.env, db, { user, draftId: draft.id });
+        } catch (e) {
+          if (e instanceof GateError) return c.json({ error: e.message }, 503);
+          throw e;
+        }
         await setRunState(db, draft.runId, "published");
       }
       return c.json({ ok: true, via: "direct" });
@@ -97,12 +100,66 @@ export const drafts = new Hono<{ Bindings: Env }>()
     return c.json({ error: "revise/change_angle need a live workflow instance" }, 409);
   })
 
+  // FR-6.14 per-draft translation override, both directions (design §7): POST requests a
+  // translation for a draft whose profile has translation off; DELETE drops the one the
+  // profile produced. Standalone against the `translate` route — never re-enters the
+  // Workflow. Refused once the draft is published.
+  .post("/:id/derivatives/translation", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { targetLanguage?: string };
+    if (body.targetLanguage !== "ar" && body.targetLanguage !== "en") {
+      return c.json({ error: "Body must include { targetLanguage: 'ar' | 'en' } (FR-6.14)." }, 400);
+    }
+    const db = createDb(c.env);
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
+    if (!draft) return c.json({ error: "draft not found" }, 404);
+    if (draft.status === "published" || draft.status === "retracted") {
+      return c.json({ error: `Refused: draft is ${draft.status} — translation overrides apply before publish (FR-6.14).` }, 409);
+    }
+    if (!draft.markdown) {
+      return c.json({ error: `draft is ${draft.status} and its markdown is purged (DR-9.11) — nothing to translate` }, 409);
+    }
+    const { profile } = await getActiveProfile(db, c.get("userId"));
+    if (body.targetLanguage === profile.primaryLanguage) {
+      return c.json({ error: "targetLanguage must differ from the profile's primaryLanguage (FR-3.13)." }, 400);
+    }
+    try {
+      const derivative = await translateDraft(c.env, db, {
+        draftId: draft.id,
+        runId: draft.runId,
+        userId: c.get("userId"),
+        markdown: draft.markdown,
+        targetLanguage: body.targetLanguage,
+      });
+      // outcome may be `failed` (e.g. no enabled translate route) — recorded and returned
+      // with the reason rather than dropped silently (FR-15.13)
+      return c.json({ derivative });
+    } catch (e) {
+      if (e instanceof GateError) return c.json({ error: e.message }, 503); // caps/pauses never bypassed (FR-7.7)
+      throw e;
+    }
+  })
+  .delete("/:id/derivatives/translation", async (c) => {
+    const db = createDb(c.env);
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
+    if (!draft) return c.json({ error: "draft not found" }, 404);
+    if (draft.status === "published" || draft.status === "retracted") {
+      return c.json({ error: `Refused: draft is ${draft.status} — translation overrides apply before publish (FR-6.14).` }, 409);
+    }
+    const dropped = await dropDraftTranslation(db, draft.id);
+    if (!dropped) return c.json({ error: "this draft has no translation at its current revision" }, 404);
+    return c.json({ ok: true });
+  })
+
   // FR-7.8: cancel a scheduled publish before publish_at
   .post("/:id/cancel-schedule", async (c) => {
-    const guard = devOnly(c.env);
-    if (guard) return c.json({ error: guard }, 501);
     const db = createDb(c.env);
-    const draft = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, c.req.param("id")) });
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
     if (!draft) return c.json({ error: "draft not found" }, 404);
     if (draft.status !== "scheduled") return c.json({ error: `draft is ${draft.status}, not scheduled` }, 409);
     await db
@@ -115,10 +172,10 @@ export const drafts = new Hono<{ Bindings: Env }>()
 
   // FR-7.6: urgent retract (unpublish) of a published post
   .post("/:id/retract", async (c) => {
-    const guard = devOnly(c.env);
-    if (guard) return c.json({ error: guard }, 501);
     const db = createDb(c.env);
-    const draft = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, c.req.param("id")) });
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
     if (!draft) return c.json({ error: "draft not found" }, 404);
     if (draft.status !== "published" || !draft.sanityDocumentId) {
       return c.json({ error: `draft is ${draft.status}, not published` }, 409);

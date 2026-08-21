@@ -13,9 +13,12 @@ import {
   createDraft,
   expireDraft,
   getUserById,
+  recordDerivatives,
   rejectDraft,
   scheduleDraft,
+  setDraftBlogType,
   setDraftStatus,
+  setRunAngleProposals,
   setRunState,
   updateDraftMarkdown,
 } from "../db/commands";
@@ -40,6 +43,7 @@ import {
 } from "../modules/publishing";
 import { computeNextSlot } from "../modules/publishing/schedule";
 import type { Env } from "../shared/env";
+import { notifyUser } from "../shared/notify";
 
 export interface PipelineParams {
   runId: string;
@@ -55,6 +59,7 @@ export interface ApprovalEventPayload {
   instructions?: string; // FR-7.9 (revise)
   angleIndex?: number; // change_angle
   rejectionCategory?: "quality" | "changed_mind" | "other"; // FR-7.8
+  blogType?: "public" | "em"; // Afnan's site: chosen per draft at approval (design §8)
 }
 
 const RETRY = { retries: { limit: 2, delay: "30 seconds" as const, backoff: "exponential" as const } };
@@ -83,14 +88,24 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
       const db = createDb(env);
       try {
         await assertRunnable(db, userId, { runId, userRequested: !!userTopic });
-        return { ok: true as const, skip: "" };
+        return { ok: true as const, skip: "", kind: "" };
       } catch (e) {
-        if (e instanceof SkipRunError) return { ok: false as const, skip: e.reason };
+        if (e instanceof SkipRunError) return { ok: false as const, skip: e.reason, kind: e.kind };
         throw new NonRetryableError(e instanceof Error ? e.message : "gate refused the run");
       }
     });
     if (!gate.ok) {
-      await step.do("record-skip", async () => setRunState(createDb(env), runId, "skipped", gate.skip));
+      await step.do("record-skip", async () => {
+        const db = createDb(env);
+        await setRunState(db, runId, "skipped", gate.skip);
+        if (gate.kind === "pending_drafts") {
+          // FR-7.4: a reminder push instead of a new draft
+          await notifyUser(env, db, userId, {
+            title: "Drafts waiting for your review",
+            body: "Two drafts are already pending — review them to resume scheduled runs (FR-7.4).",
+          });
+        }
+      });
       return;
     }
 
@@ -129,9 +144,13 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
       await step.do("state-drafting", async () => setRunState(createDb(env), runId, "drafting"));
 
       // ── angles (FR-6.3): auto-pick for scheduled runs; requester picks for user runs ──
-      const angleResult = await step.do("angles", RETRY, async () =>
-        proposeAngles(env, createDb(env), ctx, picked),
-      );
+      const angleResult = await step.do("angles", RETRY, async () => {
+        const db = createDb(env);
+        const result = await proposeAngles(env, db, ctx, picked);
+        // persisted so the app can render the picker (user runs) and change-angle (FR-7.9)
+        await setRunAngleProposals(db, runId, result);
+        return result;
+      });
       let angleIndex = angleResult.recommendedIndex;
       if (userTopic) {
         angleIndex = await step
@@ -155,8 +174,8 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
         }
       });
 
-      // ── text derivatives (FR-6.12/6.14); hero image happens at Sanity-write time ──
-      const texts = await step.do("derivatives", RETRY, async () =>
+      // ── text derivatives (FR-6.12/6.14) — skip-not-fail, per-kind outcomes (FR-15.13) ──
+      const derived = await step.do("derivatives", RETRY, async () =>
         deriveTexts(env, createDb(env), ctx, article),
       );
 
@@ -181,16 +200,29 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
           runId,
           draftId: draft.id,
           article,
-          texts,
+          texts: derived.texts,
           sourceUrls: picked.sourceUrls,
           provider,
           model,
         });
       });
 
+      // ── DR-9.14: one row per derivative — the review screen renders each outcome ──
+      await step.do("record-derivatives", async () =>
+        recordDerivatives(createDb(env), draft.id, 0, [
+          ...derived.outcomes,
+          { kind: "hero_image", ...sanity.heroOutcome },
+        ]),
+      );
+
       await step.do("notify", async () => {
-        // TODO(phase-2): FCM push "draft ready for review" (FR-7.1)
         console.log("pipeline: draft ready for review", { runId, sanityDocId: sanity.sanityDocId });
+        // FR-7.1: push → review draft in app. Best-effort — a push failure never fails the run.
+        await notifyUser(env, createDb(env), userId, {
+          title: "Draft ready for review",
+          body: article.title,
+          data: { draftId: draft.id, runId },
+        });
       });
 
       await step.do("state-pending", async () =>
@@ -221,36 +253,56 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
         });
         currentArticle = revised.article;
 
-        const revisedTexts = await step.do(`rederive-${rev}`, RETRY, async () =>
+        const rederived = await step.do(`rederive-${rev}`, RETRY, async () =>
           deriveTexts(env, createDb(env), ctx, revised.article),
         );
 
-        await step.do(`update-sanity-${rev}`, RETRY, async () => {
+        const revisedSanity = await step.do(`update-sanity-${rev}`, RETRY, async () => {
           const db = createDb(env);
           const user = await getUserById(db, userId);
           await updateDraftMarkdown(db, draft.id, revised.article.markdown);
-          await createSanityDraft(env, db, {
+          const result = await createSanityDraft(env, db, {
             user,
             profile,
             runId,
             draftId: draft.id,
             article: revised.article,
-            texts: revisedTexts,
+            texts: rederived.texts,
             sourceUrls: picked.sourceUrls,
             provider: revised.provider,
             model: revised.model,
             existingImageAssetId: sanity.imageAssetId, // image kept unless instructions address it (FR-7.9)
           });
           await setDraftStatus(db, draft.id, "pending_approval");
+          return result;
         });
+
+        // Revisions replace derivatives one revision at a time (DR-9.14, FR-7.9)
+        await step.do(`record-derivatives-${rev}`, async () =>
+          recordDerivatives(createDb(env), draft.id, rev, [
+            ...rederived.outcomes,
+            { kind: "hero_image", ...revisedSanity.heroOutcome },
+          ]),
+        );
         await step.do(`notify-rev-${rev}`, async () => {
           console.log("pipeline: revised draft ready", { runId, rev });
+          await notifyUser(env, createDb(env), userId, {
+            title: "Revised draft ready for review",
+            body: revised.article.title,
+            data: { draftId: draft.id, runId },
+          });
         });
         decision = await waitForApproval(step, rev);
       }
 
       // ── terminal decision ────────────────────────────────────────────────────
       if (decision.action === "approve") {
+        if (decision.blogType) {
+          const chosenBlogType = decision.blogType;
+          await step.do("set-blog-type", async () =>
+            setDraftBlogType(createDb(env), draft.id, chosenBlogType),
+          );
+        }
         const edited = decision.editedMarkdown;
         if (edited && edited !== currentArticle.markdown) {
           const before = currentArticle.markdown;
@@ -297,9 +349,13 @@ export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
         });
       }
     } catch (e) {
-      await step.do("record-failure", async () =>
-        setRunState(createDb(env), runId, "failed", e instanceof Error ? e.message.slice(0, 500) : "unknown"),
-      );
+      await step.do("record-failure", async () => {
+        const db = createDb(env);
+        const message = e instanceof Error ? e.message.slice(0, 500) : "unknown";
+        await setRunState(db, runId, "failed", message);
+        // design §9: "run failed" push, so a broken pipeline is noticed, not discovered
+        await notifyUser(env, db, userId, { title: "Pipeline run failed", body: message.slice(0, 200), data: { runId } });
+      });
       throw e;
     }
   }

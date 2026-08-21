@@ -41,6 +41,38 @@ export async function recentTopicTitles(db: Db, userId: string, days = 30): Prom
   return rows.map((r) => r.title);
 }
 
+export interface TopicRequestWarnings {
+  /** Banned topics the request collides with — blocks unless explicitly overridden (FR-7.7). */
+  bannedCollisions: string[];
+  /** Similar topics covered in the last 30 days — informs, never blocks (FR-5.7/7.7). */
+  similarRecentTopics: string[];
+}
+
+/**
+ * FR-7.7 pre-flight for user-requested topics, run in code BEFORE the workflow starts
+ * (design §6): a banned-topic collision warns and requires overrideBannedTopics: true on
+ * resubmit; the 30-day dedup only informs. Matching is deliberately plain substring
+ * containment, case-insensitive — the hard compliance net stays in the generation
+ * guardrails (FR-6.6-6.8), which apply regardless of topic origin.
+ */
+export async function checkTopicRequest(
+  db: Db,
+  profile: Profile,
+  userId: string,
+  topic: { title: string; notes?: string },
+): Promise<TopicRequestWarnings> {
+  const haystack = `${topic.title} ${topic.notes ?? ""}`.toLowerCase();
+  const bannedCollisions = profile.topicPolicy.bannedTopics.filter((banned) =>
+    haystack.includes(banned.toLowerCase()),
+  );
+  const title = topic.title.toLowerCase();
+  const similarRecentTopics = (await recentTopicTitles(db, userId)).filter((recent) => {
+    const r = recent.toLowerCase();
+    return r.includes(title) || title.includes(r);
+  });
+  return { bannedCollisions, similarRecentTopics };
+}
+
 /** FR-5.4: LLM + web search returns candidates; all are persisted (DR-9.3). */
 export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<CandidateRef[]> {
   const recent = await recentTopicTitles(db, ctx.userId);
