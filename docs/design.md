@@ -177,6 +177,10 @@ draft_derivatives  id PK · draft_id FK · kind (hero_image|x|linkedin|translati
                    -- differently; a derivative the profile never asked for gets NO row
                    -- at all (§5: absent, not skipped — comment corrected 2026-08-21;
                    -- the earlier "never asked for" gloss contradicted §5)     (DR-9.14)
+                   · meta jsonb nullable  -- translation only (added 2026-08-21):
+                     -- {title, excerpt, imageAlt, targetLanguage} in the target
+                     -- language — what the publish-time second document (§8) needs
+                     -- beyond the markdown in `content`
 
 draft_revisions    id PK · draft_id FK · revision_no (1..3) · instructions text
                    · created_at   -- feeds profile refinement like edit_diffs (FR-7.9, DR-9.12)
@@ -375,10 +379,12 @@ viable only while the table is small; the column is what stops that from being a
 
 *(Executed 2026-08-21: the backfill keys its per-user answers by the documented per-creator
 Sanity projects (§8) — a committed SQL migration has no parameters — and raises on any row
-outside that set. Both rows migrated to `en` + translation off as decided. Separately and
-later the same day, Afnan's **activation** created a new profile version choosing
-`primaryLanguage: "en"` with `translation: {enabled, targetLanguage: "ar"}` — the migration
-decision governed the rewrite of history, not her go-forward setting.)*
+outside that set. Both rows migrated to `en` + translation off as decided. Afnan's
+**activation** the same day briefly chose `en` + automatic Arabic translation, then was
+**revised to English-only by default**: Arabic editions are produced on demand through the
+per-draft translation override (FR-6.14) — a new profile version each time, profiles being
+append-only. The migration decision governed the rewrite of history, not her go-forward
+setting.)*
 
 Corresponding change in `packages/shared/src/profile.ts`: `profileSchema` describes the *current*
 shape only. Historic shapes live beside it as `profileSchemaV1` etc., used by the upcasts — never
@@ -816,7 +822,7 @@ Publishing obligations this adds (owned by a **per-site mapper** in `modules/pub
 - generate `slug` (transliterated for Arabic titles), `excerpt`, and **image alt text** with every article — alt is mandatory on Afnan's site;
 - set the site's date field at publish time;
 - Afnan: choose `blogType` (public vs em) — **decided 2026-08-21: chosen per draft at approval**, not a profile field. The Sanity draft is created with a provisional `public` (the compliance-safe default); the reviewer's choice arrives on the decision payload (§7), is stored on `drafts.blog_type` (§3), and is patched onto the document at publish time;
-- translation (FR-6.14) maps per site: Waleed = one document per language (his `language` field — a translated draft ⇒ two documents), Afnan = a second document linked via `translation.metadata` (her i18n plugin); the second document is written only when `profile.translation.enabled` produced one (FR-3.13);
+- translation (FR-6.14) maps per site: Waleed = one document per language (his `language` field — a translated draft ⇒ two documents), Afnan = a second document linked via `translation.metadata` (her i18n plugin); the second document is written only when `profile.translation.enabled` produced one (FR-3.13). *(Implemented 2026-08-21: the translated edition is created **at publish time** from the draft's current-revision produced translation row — one approval covers both editions, revisions never desync, and a stale earlier-revision translation can never publish. The `translate` task returns structured {title, excerpt, imageAlt, markdown} so the second document is fully in the target language; deterministic ids `postauto-{runId}-{lang}` and `postauto-{runId}-i18n`; the metadata document uses WEAK references so retract (FR-7.6) — which covers both editions — is never blocked; a translated-edition failure logs and never rolls back the primary publish.)*
 - **no author reference** — both are single-author sites (`identity.sanityAuthorId` dropped from the profile).
 
 **Draft-first flow (FR-8.1):** the Worker creates `drafts.draft-{runId}` via the Mutations API with the write-scoped token; approval triggers the publish action for that ID. Generated hero images are uploaded to Sanity's assets API first, then referenced from the site's image field (`image` / `featuredImage`) with generated alt text — the image, channel versions, and translation all live on the same draft, so one approval covers everything.

@@ -57,9 +57,10 @@ export const WALEED_PROFILE: Profile = profileSchema.parse({
 });
 
 // Afnan's hand-written medical profile (design §12 Phase 2) — her July draft content,
-// activated as-is (decided 2026-08-21) with the language pair stated explicitly:
-// English primary, Arabic translation (FR-3.7/3.13). blogType is chosen per draft at
-// review (design §8); auto_publish stays FALSE permanently (FR-7.2).
+// activated as-is with the language stated explicitly (FR-3.7/3.13). Revised 2026-08-21:
+// English only by default; Arabic editions on demand via the per-draft translation
+// override (FR-6.14), never automatically. blogType is chosen per draft at review
+// (design §8); auto_publish stays FALSE permanently (FR-7.2).
 export const AFNAN_PROFILE: Profile = profileSchema.parse({
   identity: { displayName: "Dr. Afnan Almass" },
   domain: {
@@ -103,7 +104,7 @@ export const AFNAN_PROFILE: Profile = profileSchema.parse({
   },
   cadence: { postsPerWeek: 2, preferredDays: ["tue", "fri"], preferredHourUtc: 6 },
   primaryLanguage: "en",
-  translation: { enabled: true, targetLanguage: "ar" },
+  translation: { enabled: false }, // Arabic on demand per draft (FR-6.14), never automatic
   format: { type: "article", targetWords: 1000 },
   examplePosts: [
     "Artificial intelligence (AI) is reshaping emergency medicine by bringing speed, precision, and predictive power to some of the most time-critical decisions in healthcare. In the emergency department (ED), where seconds matter, AI-driven tools are helping clinicians triage patients more effectively, interpret imaging faster, and anticipate clinical deterioration before it happens. Beyond diagnostics, AI is being integrated into workflow optimization and clinical decision support — the goal is not to replace clinicians but to augment their capabilities, allowing emergency physicians to focus on complex judgment calls while AI manages data-heavy tasks.",
