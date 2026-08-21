@@ -116,7 +116,7 @@ export default {
       case "0 * * * *":
         ctx.waitUntil(hourlyPublish(env, db));
         break;
-      case "0 3 * * 0": // weekly Sanity dataset export → R2 (NFR-16.3)
+      case "0 3 * * SUN": // weekly Sanity dataset export → R2 (NFR-16.3)
         ctx.waitUntil(backupSanityDatasets(env, db));
         break;
     }

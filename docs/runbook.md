@@ -58,7 +58,7 @@ in the same sitting.
 
 ### 3.2 Content — weekly Sanity export → R2
 - The Worker exports **every creator project** (from `users.sanity_project_id`, so a new
-  creator is picked up automatically) each **Sunday 03:00 UTC** (cron `0 3 * * 0`) to the
+  creator is picked up automatically) each **Sunday 03:00 UTC** (cron `0 3 * * SUN`) to the
   R2 bucket `post-automate-backups`, keys `sanity/{projectId}/{dataset}/{YYYY-MM-DD}.ndjson`.
 - This is the HTTP equivalent of `sanity dataset export`: every document as ndjson.
   **Asset binaries are not in the export** — they live on Sanity's CDN; the asset

@@ -12,7 +12,7 @@
   ],
   "triggers": {
     // 06:00 UTC daily dispatcher (per-user cadence in data, FR-3.6) + hourly publisher (FR-7.5)
-    "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"]
+    "crons": ["0 6 * * *", "0 * * * *", "0 3 * * SUN"]
   },
   "vars": { "ENVIRONMENT": "development" },
 
@@ -28,7 +28,7 @@
       // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
       // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
       // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
-      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"] }
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * SUN"] }
     },
     "production": {
       "vars": { "ENVIRONMENT": "production" },
@@ -40,7 +40,7 @@
       // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
       // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
       // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
-      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * 0"] }
+      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * SUN"] }
     }
   }
 }
