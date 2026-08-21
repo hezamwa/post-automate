@@ -9,23 +9,28 @@
     "typecheck": "tsc --noEmit && tsc -p scripts --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@post-automate/shared": "workspace:*",
     "drizzle-orm": "^0.38.0",
     "hono": "^4.6.0",
+    "jose": "^5",
     "marked": "^18.0.6",
     "postgres": "^3.4.5",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260708.1",
+    "@electric-sql/pglite": "^0.5.5",
     "@types/node": "^24.0.0",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "vitest": "^4.1.11",
     "wrangler": "^4.20.0"
   }
 }

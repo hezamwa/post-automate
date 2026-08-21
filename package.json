@@ -6,5 +6,8 @@
     "dev": "pnpm --filter @post-automate/backend dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
   }
 }

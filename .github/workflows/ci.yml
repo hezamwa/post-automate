@@ -7,7 +7,7 @@ on:
 
 jobs:
   typescript:
-    # Backend + admin + shared: typecheck (tests join in Phase 1 — NFR-16.1)
+    # Backend + admin + shared: typecheck + unit tests (NFR-16.1)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +18,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: codebase/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+        working-directory: codebase
       - run: pnpm typecheck
+        working-directory: codebase
+      - run: pnpm test
+        working-directory: codebase
 
   mobile:
     runs-on: ubuntu-latest
@@ -32,14 +37,14 @@ jobs:
         with:
           filters: |
             mobile:
-              - 'apps/mobile/**'
+              - 'codebase/apps/mobile/**'
       - uses: subosito/flutter-action@v2
         if: steps.changes.outputs.mobile == 'true'
         with:
           channel: stable
       - run: flutter analyze
         if: steps.changes.outputs.mobile == 'true'
-        working-directory: apps/mobile
+        working-directory: codebase/apps/mobile
 
 # Deploys (staging on merge, production on tag/approval — NFR-16.2) are added in Phase 1
 # once the Cloudflare account/token and DB are wired: wrangler deploy --env staging, etc.

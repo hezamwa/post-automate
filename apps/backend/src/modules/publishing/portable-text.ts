@@ -88,6 +88,23 @@ function walkBlocks(tokens: Token[], out: PtBlock[], ctx: BlockCtx): void {
         });
         break;
       }
+      case "table": {
+        // Tables are not in the sites' block types. Flatten each row to a prose line so
+        // the content survives — a `table` token carries neither `.tokens` nor `.text`,
+        // so without this case the default branch below silently drops it entirely.
+        const tbl = t as Tokens.Table;
+        const rowToBlock = (cells: Tokens.TableCell[]): void => {
+          const inline: Token[] = [];
+          cells.forEach((cell, i) => {
+            if (i > 0) inline.push({ type: "text", raw: " — ", text: " — " } as Token);
+            inline.push(...(cell.tokens ?? []));
+          });
+          out.push(makeBlock(inline, ctx));
+        };
+        if (tbl.header?.length) rowToBlock(tbl.header);
+        for (const row of tbl.rows ?? []) rowToBlock(row);
+        break;
+      }
       case "space":
       case "hr":
         break;
