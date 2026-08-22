@@ -28,7 +28,9 @@
       // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
       // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
       // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
-      "triggers": { "crons": ["0 6 * * *", "0 * * * *", "0 3 * * SUN"] }
+      // No crons on staging since production went live (2026-08-22): both envs share the
+      // DB, and two dispatchers would double-launch runs. Staging is triggered manually.
+      "triggers": { "crons": [] }
     },
     "production": {
       "vars": { "ENVIRONMENT": "production" },

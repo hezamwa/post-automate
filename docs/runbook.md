@@ -110,5 +110,9 @@ Checklist to complete it (≈15 minutes, non-destructive):
   `cd codebase/apps/backend && pnpm exec wrangler deploy --env staging`.
 - **Migrations:** always via drizzle's journal (`pnpm db:migrate` with `DATABASE_URL` set,
   or CI) — never hand-written SQL against a live DB (NFR-16.2).
-- **Production:** deliberately not wired yet — needs its own Neon branch + Hyperdrive
-  config (`wrangler.jsonc` TODO), per-env secrets, and the tag-triggered deploy job.
+- **Production:** live since 2026-08-22 at `post-automate-production.hezamwa.workers.dev`
+  — the ONLY environment that can publish (FR-8.5); it owns all cron schedules (staging
+  has none — two dispatchers on the shared DB would double-launch runs). Deploys are
+  explicit: `pnpm exec wrangler deploy --env production`. Still open: a dedicated Neon
+  branch + Hyperdrive config (currently shared with staging — `wrangler.jsonc` TODO)
+  and a tag-triggered CI job.

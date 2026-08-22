@@ -14,16 +14,18 @@ import { notifyUser } from "./shared/notify";
 export { PipelineWorkflow } from "./workflows/pipeline";
 
 const app = new Hono<{ Bindings: Env }>();
-// CORS: only the Flutter web dev origin, and only outside production — native mobile
-// apps never preflight, and the deployed web/admin surfaces are served same-origin.
-app.use("*", async (c, next) => {
-  if (c.env.ENVIRONMENT === "production") return next();
-  return cors({
-    origin: "http://localhost:8090", // tools/run-web.sh — pinned web dev port
+// CORS: exactly one origin — the Flutter web dev port (tools/run-web.sh) — so the web
+// build can drive any environment while the app is run-from-source (2026-08-22; drop
+// once the app ships natively or is hosted same-origin). Not a security boundary here:
+// auth is Bearer-only (no cookies), so CORS only decides which browser pages may call.
+app.use(
+  "*",
+  cors({
+    origin: "http://localhost:8090",
     allowHeaders: ["authorization", "content-type"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE"],
-  })(c, next);
-});
+  }),
+);
 app.get("/health", (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }));
 app.route("/", api);
 
