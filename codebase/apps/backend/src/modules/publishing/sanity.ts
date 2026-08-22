@@ -81,9 +81,16 @@ export function assertCanPublish(env: Env): void {
 /** Publish = copy the draft to the published id + delete the draft (FR-8.1). */
 export async function publishDraft(env: Env, t: SanityTarget, draftId: string): Promise<string> {
   assertCanPublish(env);
-  const doc = await getDocument(env, t, draftId);
-  if (!doc) throw new Error(`Draft ${draftId} not found in ${t.projectId}/${t.dataset}`);
   const publishedId = draftId.replace(/^drafts\./, "");
+  const doc = await getDocument(env, t, draftId);
+  if (!doc) {
+    // Idempotent + Studio-tolerant (AR-10.3; the FR-8.6 webhook isn't built yet): if the
+    // draft is gone but the published copy exists, someone — a retried step, or the user
+    // in Sanity Studio — already published. Converge instead of failing, so an approve
+    // after a Studio publish heals the pipeline state rather than 500ing.
+    if (await getDocument(env, t, publishedId)) return publishedId;
+    throw new Error(`Draft ${draftId} not found in ${t.projectId}/${t.dataset} (and no published copy exists)`);
+  }
   await mutate(env, t, [
     { createOrReplace: { ...doc, _id: publishedId } },
     { delete: { id: draftId } },

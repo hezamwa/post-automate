@@ -28,6 +28,12 @@ app.use(
 );
 app.get("/health", (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }));
 app.route("/", api);
+// Never a bare 500: every refusal in this system is written to be shown to a human
+// (FR-15.8's spirit) — surface the message so "operation failed" is diagnosable in-app.
+app.onError((err, c) => {
+  console.error(`unhandled route error [${c.req.method} ${c.req.path}]:`, err.message);
+  return c.json({ error: err.message }, 500);
+});
 
 const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
