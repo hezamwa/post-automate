@@ -66,6 +66,7 @@ export function MonitorView() {
   const [error, setError] = useState("");
   const [capInput, setCapInput] = useState("");
   const [busy, setBusy] = useState("");
+  const [recheck, setRecheck] = useState<{ done: number; total: number } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -93,6 +94,28 @@ export function MonitorView() {
     } finally {
       setBusy("");
     }
+  }
+
+  // FR-15.5 "on demand (with re-test)": canary every ENABLED route via the existing
+  // per-route test endpoint (which stores the human-readable result), then reload.
+  async function recheckAll() {
+    if (!data) return;
+    const targets = data.routeHealth.filter((r) => r.enabled);
+    setError("");
+    setRecheck({ done: 0, total: targets.length });
+    let failures = 0;
+    for (const r of targets) {
+      try {
+        const { result } = await api<{ result: { status: string } }>(`/admin/ai/routes/${r.routeId}/test`, { method: "POST" });
+        if (result.status !== "ok") failures++;
+      } catch {
+        failures++; // stored result (or the error) shows in the reloaded table
+      }
+      setRecheck((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+    }
+    setRecheck(null);
+    if (failures > 0) setError(`Re-check finished: ${failures} of ${targets.length} route(s) not OK — details in the table below.`);
+    await reload();
   }
 
   async function saveCap() {
@@ -211,7 +234,13 @@ export function MonitorView() {
       </div>
 
       <div className="panel">
-        <h2>Route health (FR-15.5)</h2>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "1rem", marginBottom: "0.75rem" }}>
+          <h2 style={{ margin: 0 }}>Route health (FR-15.5)</h2>
+          <button disabled={recheck !== null} onClick={() => void recheckAll()}>
+            {recheck ? `Testing ${recheck.done}/${recheck.total}…` : "Re-check all routes"}
+          </button>
+          <span className="muted">canaries every enabled route; disabled routes are skipped</span>
+        </div>
         <table>
           <thead><tr><th>Task</th><th>Route</th><th>Status</th><th>Last result</th></tr></thead>
           <tbody>

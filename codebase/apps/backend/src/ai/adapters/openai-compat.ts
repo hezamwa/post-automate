@@ -1,4 +1,5 @@
 import type { HealthStatus, ProviderId } from "@post-automate/shared";
+import { MODEL_REGISTRY } from "../registry";
 import type { Env } from "../../shared/env";
 import type {
   ChatRequest,
@@ -169,6 +170,18 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
   async function healthCheck(model: string): Promise<HealthResult> {
     const started = Date.now();
     try {
+      // Capability-appropriate canary (FR-15.5, design §6.3): a chat ping against an
+      // image model answers "model not found" even when the route works — for non-chat
+      // models, probe GET /models/{id} instead: validates auth + model existence for
+      // free (a real smallest-size generation would bill per re-check-all click).
+      const registered = MODEL_REGISTRY.find((m) => m.provider === provider && m.model === model);
+      if (registered && registered.capability !== "chat") {
+        const res = await fetch(`${cfg.baseUrl}/models/${encodeURIComponent(model)}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        if (!res.ok) throw new AdapterHttpError(res.status, `GET /models/${model} → HTTP ${res.status}`);
+        return { status: "ok", latencyMs: Date.now() - started, message: "OK — model responded." };
+      }
       const body: Record<string, unknown> = {
         model,
         messages: [{ role: "user", content: "ping" }],
