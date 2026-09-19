@@ -3,13 +3,13 @@ import { Hono } from "hono";
 import { GateError } from "../ai/gates";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
-import { getUserById, rejectDraft, scheduleDraft, setDraftBlogType, setRunState } from "../db/commands";
+import { getUserById, setRunState } from "../db/commands";
 import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
-import { computeNextSlot } from "../modules/publishing/schedule";
-import { deleteDraft, publishApprovedDraft, retractPublished, retractTranslatedEdition } from "../modules/publishing";
+import { retractPublished, retractTranslatedEdition } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
-import type { ApprovalEventPayload } from "../workflows/gates/draft";
+import { approveDirect, rejectDirect } from "../workflows/direct";
+import { approvalSchema, DRAFT_EVENT_TYPE } from "../workflows/gates/draft";
 
 // Design §7: drafts queue + decisions (FR-7.x). JWT-authenticated (FR-2.2); every
 // query is scoped to the authenticated user, and a foreign draft reads as 404 —
@@ -27,20 +27,22 @@ export const drafts = new Hono<AuthedEnv>()
 
   // Review-screen detail: markdown (the app's editing source of truth until publish,
   // DR-9.11), latest derivatives, and the run's stored angle proposals (FR-7.9).
-  // (§7's route table lacks a detail route — flagged as a doc gap.)
   .get("/:id", async (c) => {
     const detail = await getDraftDetail(createDb(c.env), c.get("userId"), c.req.param("id"));
     if (!detail) return c.json({ error: "draft not found" }, 404);
     return c.json(detail);
   })
 
-  // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?,
-  //  instructions?, angleIndex?, rejectionCategory?} (FR-7.5, FR-7.8-7.9)
+  // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?, channels?,
+  //  instructions?, angleIndex?, rejectionCategory?, blogType?} (FR-7.5, FR-7.8-7.9).
+  // `channels` is the derivatives gate — ticked on the approve screen (spec §4.1).
   .post("/:id/decision", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ApprovalEventPayload;
-    if (!["approve", "reject", "revise", "change_angle"].includes(body.action)) {
-      return c.json({ error: "action must be approve|reject|revise|change_angle" }, 400);
+    const parsed = approvalSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success || parsed.data.action === "expired") {
+      const detail = parsed.success ? "" : ` (${parsed.error.issues[0]?.message ?? "invalid body"})`;
+      return c.json({ error: `action must be approve|reject|revise|change_angle${detail}` }, 400);
     }
+    const body = parsed.data;
     const db = createDb(c.env);
     const draft = await db.query.drafts.findFirst({
       where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
@@ -62,39 +64,26 @@ export const drafts = new Hono<AuthedEnv>()
     if (run?.workflowInstanceId) {
       try {
         const instance = await c.env.PIPELINE.get(run.workflowInstanceId);
-        await instance.sendEvent({ type: "approval", payload: body });
+        await instance.sendEvent({ type: DRAFT_EVENT_TYPE, payload: body });
         return c.json({ ok: true, via: "workflow" });
       } catch (e) {
         console.warn("workflow event delivery failed — direct handling:", e instanceof Error ? e.message : e);
       }
     }
-    // Fallback (e.g. draft un-scheduled after its workflow completed): handle directly
-    const user = await getUserById(db, draft.userId);
+    // Fallback (instance gone — spec §5.1): the same steps the workflow runs, inline.
+    // Scheduling is not a publish and is allowed under publishing.paused; publishing now
+    // is refused at the Sanity write (FR-15.12b).
     if (body.action === "approve") {
-      if (body.blogType) await setDraftBlogType(db, draft.id, body.blogType);
-      if (body.publishMode === "next_slot") {
-        // Scheduling is not a publish — allowed under publishing.paused; the hourly
-        // publisher holds it until the switch is resumed (FR-15.12b).
-        const { profile } = await getActiveProfile(db, user.id);
-        await scheduleDraft(db, draft.id, computeNextSlot(profile));
-        await setRunState(db, draft.runId, "publishing");
-      } else {
-        try {
-          await publishApprovedDraft(c.env, db, { user, draftId: draft.id });
-        } catch (e) {
-          if (e instanceof GateError) return c.json({ error: e.message }, 503);
-          throw e;
-        }
-        await setRunState(db, draft.runId, "published");
+      try {
+        const status = await approveDirect(c.env, db, { draft, decision: body });
+        return c.json({ ok: true, via: "direct", status });
+      } catch (e) {
+        if (e instanceof GateError) return c.json({ error: e.message }, 503);
+        throw e;
       }
-      return c.json({ ok: true, via: "direct" });
     }
     if (body.action === "reject") {
-      if (draft.sanityDocumentId?.startsWith("drafts.")) {
-        await deleteDraft(c.env, { projectId: user.sanityProjectId!, dataset: user.sanityDataset }, draft.sanityDocumentId);
-      }
-      await rejectDraft(db, draft.id, body.rejectionCategory ?? "other");
-      await setRunState(db, draft.runId, "rejected", `rejected: ${body.rejectionCategory ?? "other"}`);
+      await rejectDirect(c.env, db, { draft, category: body.rejectionCategory ?? "other" });
       return c.json({ ok: true, via: "direct" });
     }
     return c.json({ error: "revise/change_angle need a live workflow instance" }, 409);

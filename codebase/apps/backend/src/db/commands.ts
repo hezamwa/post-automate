@@ -218,7 +218,7 @@ export async function expireDraft(db: Db, draftId: string): Promise<void> {
 
 export interface DerivativeRecord {
   kind: "hero_image" | "x" | "linkedin" | "translation";
-  outcome: "produced" | "skipped" | "failed";
+  outcome: "produced" | "skipped" | "failed" | "declined";
   content?: string;
   assetRef?: string;
   reason?: string;

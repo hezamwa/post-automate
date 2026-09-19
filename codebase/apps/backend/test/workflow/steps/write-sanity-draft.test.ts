@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetShared, shared } from "../preamble";
-import { recordDerivatives } from "../../../src/db/commands";
 import { runStep } from "../../../src/workflows/steps/step";
 import { writeSanityDraft } from "../../../src/workflows/steps/write-sanity-draft";
 import { draftRow, seedDraftRow, stepContext } from "../harness";
@@ -10,24 +9,20 @@ import { article } from "../mocks";
 beforeEach(resetShared);
 
 describe("write-sanity-draft step", () => {
-  it("writes drafts.postauto-{runId} with the produced channel texts and image, and points the draft at it", async () => {
+  it("writes drafts.postauto-{runId} with the image and provenance, and points the draft at it", async () => {
     const ctx = await stepContext();
     const draftId = await seedDraftRow(ctx);
-    await recordDerivatives(shared.db, draftId, 0, [
-      { kind: "x", outcome: "produced", content: "x text" },
-      { kind: "linkedin", outcome: "failed", reason: "nope" },
-    ]);
     const out = await runStep(shared.step as never, ctx, writeSanityDraft, {
       draftId, revisionNo: 0, article: article(), sourceUrls: ["https://a.example"], provider: "anthropic", model: "m", imageAssetId: "image-1", revised: false,
     });
     expect(out).toEqual({ sanityDocId: `drafts.postauto-${ctx.runId}` });
     expect(shared.sanity.docs.get(out.sanityDocId)).toMatchObject({
       _type: "post",
-      xVersion: "x text",
       image: { asset: { _ref: "image-1" } },
       generationMeta: { sourceUrls: ["https://a.example"], model: "m" },
     });
-    expect(shared.sanity.docs.get(out.sanityDocId)).not.toHaveProperty("linkedinVersion");
+    // channel versions are patched on after approval by the derive steps, not written here
+    expect(shared.sanity.docs.get(out.sanityDocId)).not.toHaveProperty("xVersion");
     expect((await draftRow(ctx.runId))?.sanityDocumentId).toBe(out.sanityDocId);
     expect(shared.step.bills).toEqual([]);
   });

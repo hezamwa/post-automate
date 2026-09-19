@@ -83,6 +83,16 @@ export async function writeSanityDraft(
   return { sanityDocId };
 }
 
+/** Set derivative fields (xVersion / linkedinVersion — same names on both sites) on the Sanity draft. */
+export async function patchDraftFields(
+  env: Env,
+  user: PublishTargetUser,
+  sanityDocId: string,
+  fields: Record<string, string>,
+): Promise<void> {
+  await mutate(env, targetOf(user), [{ patch: { id: sanityDocId, set: fields } }]);
+}
+
 /** Upload generated hero bytes to Sanity assets; returns only the asset reference (spec §3 step 11). */
 export async function uploadHeroImage(
   env: Env,

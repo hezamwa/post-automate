@@ -47,7 +47,7 @@ export const translationMetaSchema = z.object({
 /** One per-kind outcome row for DR-9.14 — recorded to draft_derivatives by the caller. */
 export const textDerivativeOutcomeSchema = z.object({
   kind: z.enum(["x", "linkedin", "translation"]),
-  outcome: z.enum(["produced", "skipped", "failed"]),
+  outcome: z.enum(["produced", "skipped", "failed", "declined"]),
   content: z.string().optional(),
   reason: z.string().optional(), // why skipped/failed — human-readable, surfaced on the review screen
   meta: translationMetaSchema.optional(), // translation only (design §8)

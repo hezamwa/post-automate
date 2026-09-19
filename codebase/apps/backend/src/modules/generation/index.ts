@@ -137,7 +137,7 @@ export async function translateArticle(
  * not draft_revisions — because change_angle revisions re-derive without an instructions
  * row, and the override must land on the same revision the review screen shows.
  */
-async function currentRevisionNo(db: Db, draftId: string): Promise<number> {
+export async function latestDerivativeRevision(db: Db, draftId: string): Promise<number> {
   const [latest] = await db
     .select({ revisionNo: schema.draftDerivatives.revisionNo })
     .from(schema.draftDerivatives)
@@ -173,7 +173,7 @@ export async function translateDraft(
     { title: args.title, markdown: args.markdown },
     args.targetLanguage,
   );
-  const revisionNo = await currentRevisionNo(db, args.draftId);
+  const revisionNo = await latestDerivativeRevision(db, args.draftId);
   await db
     .insert(schema.draftDerivatives)
     .values({
@@ -200,7 +200,7 @@ export async function translateDraft(
 
 /** FR-6.14 the other direction: drop the translation the profile produced for this draft. */
 export async function dropDraftTranslation(db: Db, draftId: string): Promise<boolean> {
-  const revisionNo = await currentRevisionNo(db, draftId);
+  const revisionNo = await latestDerivativeRevision(db, draftId);
   const deleted = await db
     .delete(schema.draftDerivatives)
     .where(

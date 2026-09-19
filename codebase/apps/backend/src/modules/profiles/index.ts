@@ -53,3 +53,15 @@ export async function createProfileVersion(
     .returning({ id: schema.profiles.id });
   return { id: row!.id, version };
 }
+
+/** One specific version — what a run pinned (spec §3 step 2), for work done on its behalf later. */
+export async function getProfileVersion(db: Db, userId: string, version: number): Promise<{ version: number; profile: Profile }> {
+  const row = await db.query.profiles.findFirst({
+    where: and(eq(schema.profiles.userId, userId), eq(schema.profiles.version, version)),
+  });
+  if (!row) throw new Error(`Profile v${version} for user ${userId} not found (FR-3.10)`);
+  if (row.schemaVersion !== PROFILE_SCHEMA_VERSION) {
+    throw new Error(`Profile v${version} for user ${userId} carries payload schema v${row.schemaVersion}; this build reads v${PROFILE_SCHEMA_VERSION} (DR-9.15)`);
+  }
+  return { version: row.version, profile: profileSchema.parse(row.payload) };
+}

@@ -16,15 +16,17 @@ an edit, not a rename cascade.
 | 5 | `steps/angles.ts` → `gates/angle.ts` | §3 step 5, §4.3 |
 | 7 | `steps/draft.ts` | §3 step 7 |
 | 9 | `steps/save-draft.ts` | §3 step 9 |
-| 14–16 | `steps/derive-x.ts`, `steps/derive-linkedin.ts`, `steps/translate.ts` *(still before review until the reorder phase)* | §3 steps 14–16 |
 | 11 | `steps/hero-image.ts` | §3 step 11 |
 | 12 | `steps/write-sanity-draft.ts` | §3 step 12 |
 | 13 | `steps/notify.ts` → `gates/draft.ts` + `loops/revise.ts` | §3 step 13, §5 |
+| 14–16 | `steps/derive-x.ts`, `steps/derive-linkedin.ts`, `steps/translate.ts` — after approval, from the final markdown, only the ticked channels (`loops/derivatives.ts`) | §3 steps 14–16, §4.1 |
 | 17 | `steps/publish.ts` | §3 step 17, §6 |
 | 18 | `steps/record.ts` | §3 step 18 |
 
 `steps/derive-channel.ts` is the shape the two channel steps share, including the one
-corrective pass (its own step) when an answer runs over the channel limit.
+corrective pass (its own step) when an answer runs over the channel limit. `direct.ts`
+runs approve → derivatives → publish inline for a draft whose instance is gone (spec §5.1),
+with the same step definitions.
 
 Contracts: `steps/step.ts` (`defineStep`, `runStep`, retry policies), `gates/gate.ts`
 (`defineGate`, `applyGate`), `gates/options.ts` (the one option shape), `context.ts`

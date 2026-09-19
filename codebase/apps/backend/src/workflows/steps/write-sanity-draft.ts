@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { getUserById, setDraftStatus, updateDraftMarkdown } from "../../db/commands";
-import { producedChannelTexts } from "../../db/queries";
 import { articleSchema } from "../../modules/generation/types";
 import { writeSanityDraft as writeDoc } from "../../modules/publishing";
 import { profileOf } from "../context";
@@ -33,7 +32,7 @@ export const writeSanityDraft = defineStep({
       runId: ctx.runId,
       draftId: input.draftId,
       article: input.article,
-      texts: await producedChannelTexts(db, input.draftId, input.revisionNo),
+      texts: {}, // channel versions are patched on after approval (derive-x / derive-linkedin)
       sourceUrls: input.sourceUrls,
       provider: input.provider,
       model: input.model,

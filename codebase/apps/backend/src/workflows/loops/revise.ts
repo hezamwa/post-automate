@@ -3,14 +3,10 @@ import type { CandidateRef } from "../../modules/discovery/types";
 import type { Angle, AngleProposals, Article } from "../../modules/generation/types";
 import type { RunContext } from "../context";
 import { type ApprovalEventPayload, waitForDraftDecision } from "../gates/draft";
-import { runChannel } from "../steps/derive-channel";
-import { deriveLinkedIn } from "../steps/derive-linkedin";
-import { deriveX } from "../steps/derive-x";
 import { draft } from "../steps/draft";
 import { heroImage } from "../steps/hero-image";
 import { notify } from "../steps/notify";
 import { runStep } from "../steps/step";
-import { translate } from "../steps/translate";
 import { writeSanityDraft } from "../steps/write-sanity-draft";
 
 // The revise / change_angle loop (spec §5, FR-7.9): at most 3 revisions per draft. Each
@@ -36,14 +32,11 @@ export interface Reviewable {
 }
 
 /**
- * Everything between the article and the draft gate (spec §3 steps 11–13, plus the v1
- * pre-approval derivatives until they move behind approval): one step per billable call.
+ * Everything between the article and the draft gate (spec §3 steps 11–13): hero image,
+ * Sanity draft, push. Derivatives come after approval (loops/derivatives.ts).
  */
 export async function reviewable(step: WorkflowStep, ctx: RunContext, input: ReviewableInput, suffix?: string): Promise<Reviewable> {
   const { draftId, revisionNo, article } = input;
-  await runChannel(step, ctx, deriveX, { draftId, revisionNo, markdown: article.markdown }, suffix);
-  await runChannel(step, ctx, deriveLinkedIn, { draftId, revisionNo, markdown: article.markdown }, suffix);
-  await runStep(step, ctx, translate, { draftId, revisionNo, source: article }, suffix);
   const hero = await runStep(step, ctx, heroImage, { draftId, revisionNo, article, existingAssetRef: input.existingAssetRef }, suffix);
   const { sanityDocId } = await runStep(step, ctx, writeSanityDraft, {
     draftId,

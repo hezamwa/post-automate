@@ -3,9 +3,12 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { addEditDiff, getUserById, setDraftBlogType, updateDraftMarkdown } from "../../db/commands";
 import { getDraftByRun } from "../../db/queries";
+import { approvedKinds } from "../../modules/generation/channels";
 import { patchDraftMarkdown } from "../../modules/publishing";
-import type { RunContext } from "../context";
+import { profileOf, type RunContext } from "../context";
 import { defineGate } from "./gate";
+import { schema } from "../../db/client";
+import { eq } from "drizzle-orm";
 
 // The approval gate (spec §5, AR-10.5). Always `ask`, for every user — it has no setting
 // and is the one gate resolveGate does not handle. v1 semantics until the no-expiry
@@ -15,6 +18,8 @@ export const approvalSchema = z.object({
   action: z.enum(["approve", "reject", "revise", "change_angle", "expired"]),
   publishMode: z.enum(["now", "next_slot"]).optional(), // FR-7.5
   editedMarkdown: z.string().optional(), // FR-6.9
+  /** The derivatives gate (spec §4.1): ticked kinds; absent = the profile decides. */
+  channels: z.array(z.enum(["x", "linkedin", "translation"])).optional(),
   instructions: z.string().optional(), // FR-7.9 (revise)
   angleIndex: z.number().int().min(0).optional(), // change_angle
   rejectionCategory: z.enum(["quality", "changed_mind", "other"]).optional(), // FR-7.8
@@ -55,13 +60,18 @@ export const draftGate = defineGate<ApprovalEventPayload>({
   recommended: async () => {
     throw new Error("the draft gate is always ask — it has no auto setting (spec §4.1)");
   },
-  /** Approve-with-edits (FR-6.9) and the per-draft blogType land on the draft and its Sanity doc. */
+  /**
+   * Approve: edits (FR-6.9) and blogType land on the draft and its Sanity doc; the ticked
+   * derivatives — narrowed to what the profile supports — are stored as drafts.channels,
+   * which the derive steps read (spec §4.1).
+   */
   apply: async (ctx: RunContext, choice) => {
     if (choice.action !== "approve") return;
     const db = createDb(ctx.env);
     const draft = await getDraftByRun(db, ctx.runId);
     if (!draft) throw new Error(`run ${ctx.runId} has no draft to approve`);
     if (choice.blogType) await setDraftBlogType(db, draft.id, choice.blogType);
+    await db.update(schema.drafts).set({ channels: approvedKinds(profileOf(ctx), choice.channels) }).where(eq(schema.drafts.id, draft.id));
     const edited = choice.editedMarkdown;
     if (edited && draft.markdown != null && edited !== draft.markdown) {
       await addEditDiff(db, { draftId: draft.id, userId: ctx.userId, before: draft.markdown, after: edited });

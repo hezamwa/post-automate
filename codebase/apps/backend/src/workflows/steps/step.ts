@@ -39,6 +39,24 @@ export function defineStep<I, O>(def: StepDef<I, O>): StepDef<I, O> {
 }
 
 /** Step names must be unique per run; repeated invocations (revision loops) carry a suffix. */
+/**
+ * A WorkflowStep for code running OUTSIDE the engine — direct handling of a draft whose
+ * instance is gone (spec §5.1): steps execute immediately, no durability, no retries, no
+ * waiting. The same step definitions and the same orchestration functions run either way.
+ */
+export function inlineStep(): WorkflowStep {
+  const run = async (_name: string, configOrFn: unknown, maybeFn?: unknown) =>
+    ((typeof configOrFn === "function" ? configOrFn : maybeFn) as (ctx: unknown) => Promise<unknown>)({});
+  return {
+    do: run,
+    sleep: async () => {},
+    sleepUntil: async () => {},
+    waitForEvent: async () => {
+      throw new Error("an inline step cannot wait for events — only a live Workflow instance can (spec §5.1)");
+    },
+  } as unknown as WorkflowStep;
+}
+
 export function stepName(def: { name: string }, suffix?: string): string {
   return suffix ? `${def.name}-${suffix}` : def.name;
 }

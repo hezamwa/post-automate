@@ -12,20 +12,23 @@ import { article } from "./mocks";
 beforeEach(resetShared);
 
 const approve = (extra: Record<string, unknown> = {}) => ({ type: "approval", payload: { action: "approve", publishMode: "now", ...extra } });
-const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "angles", "draft", "save-draft", "derive-x", "derive-linkedin", "translate", "hero-image", "write-sanity-draft", "notify"];
+const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "angles", "draft", "save-draft", "hero-image", "write-sanity-draft", "notify"];
+const AFTER_APPROVE = ["gate-draft", "derive-x", "derive-linkedin", "translate", "publish"];
 
 describe("scheduled/manual run", () => {
-  it("search → synthesize → score → angles → draft → save → derivatives → hero → Sanity → notify → approve → published", async () => {
+  it("search → synthesize → score → angles → draft → save → hero → Sanity → notify → approve → derivatives → published", async () => {
     const params = await startRun();
     shared.step.script(approve());
     await runWorkflow(params);
 
-    expect(shared.step.executed).toEqual([...PRE_REVIEW, "gate-draft", "publish"]);
+    expect(shared.step.executed).toEqual([...PRE_REVIEW, ...AFTER_APPROVE]);
     expect(await runRow(params.runId)).toMatchObject({ state: "published", angleProposals: { recommendedIndex: 1 } });
     const draft = await draftRow(params.runId);
     expect(draft).toMatchObject({ status: "published", markdown: null, sanityDocumentId: `postauto-${params.runId}` });
     expect(draft?.angle).toMatchObject({ headline: "Angle one" }); // the recommendation, no user pick
+    // channel versions were patched onto the Sanity draft after approval, before publish
     expect(shared.sanity.docs.get(`postauto-${params.runId}`)).toMatchObject({ xVersion: "short post", linkedinVersion: "short post", image: { asset: { _ref: "image-fake-asset" } } });
+    expect(draft?.channels).toEqual(["x", "linkedin"]); // the profile decided — nothing was unticked
     expect(shared.sanity.docs.has(`drafts.postauto-${params.runId}`)).toBe(false);
     const candidates = await candidateRows(params.runId);
     expect(candidates).toHaveLength(3);
@@ -68,17 +71,32 @@ describe("scheduled/manual run", () => {
     expect(shared.sanity.docs.has(`postauto-${params.runId}`)).toBe(false);
   });
 
-  it("approve with edits stores the diff, patches Sanity and keeps the blogType", async () => {
+  it("approve with edits stores the diff, patches Sanity, keeps the blogType — and derives from the EDITED text", async () => {
     const params = await startRun();
     shared.step.script(approve({ editedMarkdown: "# Edited by hand", blogType: "em" }));
     await runWorkflow(params);
     const draft = await draftRow(params.runId);
     expect(draft).toMatchObject({ status: "published", blogType: "em" });
+    expect(shared.ai.callsFor("shorten_x")[0]!.input.messages[0]!.content).toBe("# Edited by hand");
     const diffs = await shared.db.query.editDiffs.findMany();
     expect(diffs).toHaveLength(1);
     expect(JSON.parse(diffs[0]!.diff)).toMatchObject({ after: "# Edited by hand" });
     const published = shared.sanity.docs.get(`postauto-${params.runId}`) as { content: unknown[] };
     expect(JSON.stringify(published.content)).toContain("Edited by hand");
+  });
+
+  it("unticked channels are DECLINED — a row, no call — and the article publishes alone (spec §7)", async () => {
+    const params = await startRun({ profile: techProfile({ translation: { enabled: true, targetLanguage: "ar" } }) });
+    shared.step.script(approve({ channels: ["x"] }));
+    await runWorkflow(params);
+    const draft = await draftRow(params.runId);
+    expect(draft?.channels).toEqual(["x"]);
+    const rows = await derivativeRows(draft!.id);
+    expect(rows.map((d) => [d.kind, d.outcome]).sort()).toEqual([["hero_image", "produced"], ["linkedin", "declined"], ["translation", "declined"], ["x", "produced"]]);
+    expect(shared.ai.callsFor("shorten_linkedin")).toHaveLength(0);
+    expect(shared.ai.callsFor("translate")).toHaveLength(0);
+    expect(shared.sanity.docs.has(`postauto-${params.runId}-ar`)).toBe(false);
+    expect(shared.sanity.docs.get(`postauto-${params.runId}`)).not.toHaveProperty("linkedinVersion");
   });
 
   it("a translation-enabled profile gets the second edition from one translate call (FR-3.13)", async () => {
@@ -178,7 +196,8 @@ describe("the review loop (FR-7.9)", () => {
       approve(),
     );
     await runWorkflow(params);
-    expect(shared.step.executed).toEqual(expect.arrayContaining(["draft-rev1", "derive-x-rev1", "derive-linkedin-rev1", "translate-rev1", "hero-image-rev1", "write-sanity-draft-rev1", "notify-rev1", "draft-rev3", "publish"]));
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["draft-rev1", "hero-image-rev1", "write-sanity-draft-rev1", "notify-rev1", "draft-rev3", "derive-x", "publish"]));
+    expect(shared.step.executed.filter((s) => s.startsWith("derive-") || s.startsWith("translate"))).toEqual(["derive-x", "derive-linkedin", "translate"]); // once, after approval
     const draft = await draftRow(params.runId);
     expect(draft?.status).toBe("published");
     expect((await revisionRows(draft!.id)).map((r) => [r.revisionNo, r.instructions])).toEqual([[1, "make it shorter"], [2, "add a takeaway"], [3, "fix the hook"]]);
@@ -186,7 +205,8 @@ describe("the review loop (FR-7.9)", () => {
     expect(shared.ai.callsFor("article")[1]!.input.messages[0]!.content).toContain("make it shorter");
     expect(shared.ai.callsFor("image")).toHaveLength(1); // image kept across revisions
     const derivatives = await derivativeRows(draft!.id);
-    expect(derivatives.filter((d) => d.kind === "x").map((d) => d.revisionNo).sort()).toEqual([0, 1, 2, 3]);
+    expect(derivatives.filter((d) => d.kind === "x").map((d) => d.revisionNo)).toEqual([3]); // derived from the final revision only
+    expect(derivatives.filter((d) => d.kind === "hero_image").map((d) => d.revisionNo).sort()).toEqual([0, 1, 2, 3]);
     expect(derivatives.filter((d) => d.kind === "hero_image").every((d) => d.assetRef === "image-fake-asset")).toBe(true);
     expect(shared.pushes.map((p) => p.title)).toEqual(["Draft ready for review", "Revised draft ready for review", "Revised draft ready for review", "Revised draft ready for review"]);
     expect(shared.step.billingViolations()).toEqual([]);
@@ -219,8 +239,11 @@ describe("the review loop (FR-7.9)", () => {
     shared.step.script({ type: "approval", payload: { action: "reject", rejectionCategory: "quality" } });
     await runWorkflow(params);
     expect(await runRow(params.runId)).toMatchObject({ state: "rejected", error: "rejected: quality" });
-    expect(await draftRow(params.runId)).toMatchObject({ status: "rejected", rejectionCategory: "quality", markdown: null });
+    const draft = await draftRow(params.runId);
+    expect(draft).toMatchObject({ status: "rejected", rejectionCategory: "quality", markdown: null });
     expect(shared.sanity.docs.size).toBe(0);
+    expect((await derivativeRows(draft!.id)).map((d) => d.kind)).toEqual(["hero_image"]); // a rejected draft never paid for derivatives (spec §8)
+    expect(shared.ai.callsFor("shorten_x")).toHaveLength(0);
   });
 
   it("no decision within the wait → expired (v1 semantics), Sanity draft kept for manual handling", async () => {
@@ -241,7 +264,7 @@ describe("retry boundaries", () => {
     expect(shared.ai.callsFor("article")).toHaveLength(1);
     expect(await runRow(params.runId)).toMatchObject({ state: "failed", error: expect.stringContaining("CANNOT_COMPLY") });
     expect(shared.pushes.map((p) => p.title)).toEqual(["Pipeline run failed"]);
-    expect(shared.step.executed).not.toContain("derive-x");
+    expect(shared.step.executed).not.toContain("hero-image");
   });
 
   it("a transient provider error is retried at the step boundary and the run completes", async () => {

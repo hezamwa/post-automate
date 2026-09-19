@@ -4,6 +4,7 @@ import { createRunContext, pinProfile, type PipelineParams } from "./context";
 import { chooseAngle } from "./gates/angle";
 import { applyGate } from "./gates/gate";
 import { draftGate, waitForDraftDecision } from "./gates/draft";
+import { deriveAll } from "./loops/derivatives";
 import { reviewable, reviewLoop } from "./loops/revise";
 import { angles } from "./steps/angles";
 import { draft } from "./steps/draft";
@@ -61,7 +62,7 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     const drafted = await runStep(step, ctx, draft, { topic, angle });
     const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown });
 
-    // 11–13. derivatives (v1 position), hero image, Sanity draft, notify → draft gate
+    // 11–13. hero image, Sanity draft, notify → draft gate
     const built = await reviewable(step, ctx, {
       draftId,
       revisionNo: 0,
@@ -80,7 +81,9 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     // terminal decision
     switch (review.decision.action) {
       case "approve":
+        // edits, blogType, ticked channels → 14–16. derivatives from the final markdown → 17. publish
         await applyGate(step, ctx, draftGate, review.decision);
+        await deriveAll(step, ctx, { draftId, revisionNo: ctx.revision, source: review.article });
         await runStep(step, ctx, publish, { draftId, publishMode: review.decision.publishMode ?? "now" });
         return;
       case "reject":

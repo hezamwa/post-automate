@@ -290,20 +290,3 @@ export async function routesUsingModel(db: Db, provider: string, model: string) 
 export async function getDraftByRun(db: Db, runId: string) {
   return db.query.drafts.findFirst({ where: eq(schema.drafts.runId, runId), orderBy: desc(schema.drafts.createdAt) });
 }
-
-/** The produced X / LinkedIn texts at one revision — what the Sanity mapper carries (FR-6.12). */
-export async function producedChannelTexts(db: Db, draftId: string, revisionNo: number) {
-  const rows = await db
-    .select({ kind: schema.draftDerivatives.kind, content: schema.draftDerivatives.content })
-    .from(schema.draftDerivatives)
-    .where(
-      and(
-        eq(schema.draftDerivatives.draftId, draftId),
-        eq(schema.draftDerivatives.revisionNo, revisionNo),
-        eq(schema.draftDerivatives.outcome, "produced"),
-        inArray(schema.draftDerivatives.kind, ["x", "linkedin"]),
-      ),
-    );
-  const text = (kind: "x" | "linkedin") => rows.find((r) => r.kind === kind)?.content ?? undefined;
-  return { xVersion: text("x"), linkedinVersion: text("linkedin") };
-}

@@ -40,10 +40,11 @@ export class FakeStep {
     return this;
   }
 
-  /** Called by the router mock — attributes a billable call to the running step attempt. */
+  /** Called by the router mock — attributes a billable call to the running step attempt.
+   *  Calls made outside any step (direct handling runs steps inline) land under "(inline)". */
   noteProviderCall(taskType: string): void {
-    if (!this.current) throw new Error(`provider call for '${taskType}' outside any step`);
-    this.bills.push({ step: this.current, attempt: this.attempts.get(this.current) ?? 1, taskType });
+    const step = this.current ?? "(inline)";
+    this.bills.push({ step, attempt: this.attempts.get(step) ?? 1, taskType });
   }
 
   /** Task types billed by one step (all attempts). */

@@ -9,6 +9,8 @@ import { seedUser } from "../db/harness";
 import { techProfile } from "../fixtures";
 import { env, shared } from "./preamble";
 
+export { env };
+
 // Seed helpers for workflow and step tests. Every creator gets a device token (so pushes
 // are observable) and Waleed's Sanity project id (so the per-site mapper resolves).
 

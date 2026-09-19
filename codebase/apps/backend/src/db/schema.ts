@@ -56,7 +56,9 @@ export const healthStatus = pgEnum("health_status", [
 export const modelCapability = pgEnum("model_capability", ["chat", "image", "tts", "video", "search"]);
 export const configSource = pgEnum("config_source", ["admin", "seed", "migration"]);
 export const derivativeKind = pgEnum("derivative_kind", ["hero_image", "x", "linkedin", "translation"]);
-export const derivativeOutcome = pgEnum("derivative_outcome", ["produced", "skipped", "failed"]);
+// `declined` (spec §7): the creator left the channel unticked at the derivatives gate —
+// no call made, but a row so the publish screen shows it was a choice, not a failure.
+export const derivativeOutcome = pgEnum("derivative_outcome", ["produced", "skipped", "failed", "declined"]);
 export const blogType = pgEnum("blog_type", ["public", "em"]);
 
 export const users = pgTable("users", {
@@ -167,6 +169,9 @@ export const drafts = pgTable("drafts", {
   // Afnan's site only (design §8): chosen per draft at approval (decided 2026-08-21);
   // the Sanity draft carries a provisional "public" until then. NULL = site has no blogType.
   blogType: blogType("blog_type"),
+  // The derivatives-gate selection at approval (spec §4.1): ["x","linkedin","translation"]
+  // narrowed to what the profile supports. NULL until approved.
+  channels: jsonb("channels"),
   publishAt: timestamp("publish_at", { withTimezone: true }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
