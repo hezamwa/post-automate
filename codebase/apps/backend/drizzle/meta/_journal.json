@@ -134,6 +134,13 @@
       "when": 1789853966577,
       "tag": "0018_activity-nudges",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789854170514,
+      "tag": "0019_auto-publish",
+      "breakpoints": true
     }
   ]
 }

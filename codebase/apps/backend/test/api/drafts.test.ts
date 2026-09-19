@@ -124,3 +124,15 @@ describe("POST /drafts/:id/hold and the gate info on GET /drafts/:id (spec §4.1
     });
   });
 });
+
+describe("POST /drafts/:id/hold — the auto-publish warning's Hold (spec §5.2)", () => {
+  it("records the hold on a warned draft, so the job leaves it alone", async () => {
+    const { env } = apiEnv();
+    const { params, draftId, token } = await pending({ autoPublishWarnedAt: new Date() });
+    const res = await call(env, `/drafts/${draftId}/hold`, { method: "POST", token });
+    expect(res).toMatchObject({ status: 200, json: { ok: true, via: "auto-publish" } });
+    expect((await draftRow(params.runId))?.autoPublishHeldAt).toBeInstanceOf(Date);
+    const detail = await call(env, `/drafts/${draftId}`, { token });
+    expect(detail.json).toMatchObject({ autoPublish: false, draft: { autoPublishHeldAt: expect.any(String) } });
+  });
+});

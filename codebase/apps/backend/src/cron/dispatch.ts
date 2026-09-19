@@ -5,6 +5,7 @@ import { undecidedDraft } from "../db/queries";
 import { getActiveProfile } from "../modules/profiles";
 import type { Env } from "../shared/env";
 import { isActive } from "./activity";
+import { autoPublish } from "./auto-publish";
 import { nudgeSilentCreators } from "./nudges";
 import { draftReminders } from "./reminders";
 
@@ -39,6 +40,7 @@ export async function dailyDispatch(env: Env, db: Db, now = new Date()): Promise
     .where(and(isNotNull(schema.onboardingSessions.purgeAfter), lte(schema.onboardingSessions.purgeAfter, now)));
   await draftReminders(env, db, now);
   await nudgeSilentCreators(env, db, now);
+  await autoPublish(env, db, now);
   return { launched, skipped };
 }
 

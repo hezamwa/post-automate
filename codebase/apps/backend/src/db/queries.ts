@@ -96,6 +96,8 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
       seenAt: draft.seenAt,
       channels: draft.channels,
       qualityCheck: draft.qualityCheck, // spec §3 step 8: findings shown on the review screen
+      autoPublishWarnedAt: draft.autoPublishWarnedAt, // spec §5.2
+      autoPublishHeldAt: draft.autoPublishHeldAt,
       publishAt: draft.publishAt,
       createdAt: draft.createdAt,
       decidedAt: draft.decidedAt,

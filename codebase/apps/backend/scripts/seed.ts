@@ -55,7 +55,6 @@ async function seedUser(input: {
       role: input.role,
       sanityProjectId: input.sanityProjectId,
       sanityDataset: "production",
-      autoPublish: false, // approval for everyone initially (OD-4); medical stays false forever (FR-7.2)
       passwordHash: await hashPassword(tempPassword),
     })
     .returning({ id: schema.users.id });

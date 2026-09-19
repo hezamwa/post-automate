@@ -77,25 +77,39 @@ export async function reactivateUser(db: Db, userId: string): Promise<void> {
 export async function upsertUserLimits(
   db: Db,
   userId: string,
-  patch: { monthlyCapUsd?: number; maxRunsPerDay?: number; maxReqPerMin?: number },
+  patch: { monthlyCapUsd?: number; maxRunsPerDay?: number; maxReqPerMin?: number; autoPublish?: boolean },
 ): Promise<void> {
+  const set = {
+    ...(patch.monthlyCapUsd != null ? { monthlyCapUsd: String(patch.monthlyCapUsd) } : {}),
+    ...(patch.maxRunsPerDay != null ? { maxRunsPerDay: patch.maxRunsPerDay } : {}),
+    ...(patch.maxReqPerMin != null ? { maxReqPerMin: patch.maxReqPerMin } : {}),
+    ...(patch.autoPublish != null ? { autoPublish: patch.autoPublish } : {}),
+  };
   await db
     .insert(schema.userLimits)
-    .values({
-      userId,
-      ...(patch.monthlyCapUsd != null ? { monthlyCapUsd: String(patch.monthlyCapUsd) } : {}),
-      ...(patch.maxRunsPerDay != null ? { maxRunsPerDay: patch.maxRunsPerDay } : {}),
-      ...(patch.maxReqPerMin != null ? { maxReqPerMin: patch.maxReqPerMin } : {}),
-    })
-    .onConflictDoUpdate({
-      target: schema.userLimits.userId,
-      set: {
-        ...(patch.monthlyCapUsd != null ? { monthlyCapUsd: String(patch.monthlyCapUsd) } : {}),
-        ...(patch.maxRunsPerDay != null ? { maxRunsPerDay: patch.maxRunsPerDay } : {}),
-        ...(patch.maxReqPerMin != null ? { maxReqPerMin: patch.maxReqPerMin } : {}),
-        updatedAt: new Date(),
-      },
-    });
+    .values({ userId, ...set })
+    .onConflictDoUpdate({ target: schema.userLimits.userId, set: { ...set, updatedAt: new Date() } });
+}
+
+/** Spec §5.2: enabling auto-publish is a config change with a trail — who, when, old and new. */
+export async function auditAutoPublish(db: Db, args: { userId: string; adminId: string; oldValue: boolean; newValue: boolean }): Promise<void> {
+  await db.insert(schema.appConfigAudit).values({
+    key: `user_limits.auto_publish:${args.userId}`,
+    oldValue: args.oldValue,
+    newValue: args.newValue,
+    changedBy: args.adminId,
+    source: "admin",
+  });
+}
+
+/** The auto-publish warning went out (spec §5.2 condition 4). */
+export async function markAutoPublishWarned(db: Db, draftId: string, at = new Date()): Promise<void> {
+  await db.update(schema.drafts).set({ autoPublishWarnedAt: at }).where(eq(schema.drafts.id, draftId));
+}
+
+/** The creator tapped Hold on the warning — this draft will not auto-publish. */
+export async function holdAutoPublish(db: Db, draftId: string, at = new Date()): Promise<void> {
+  await db.update(schema.drafts).set({ autoPublishHeldAt: at }).where(eq(schema.drafts.id, draftId));
 }
 
 /**

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { GateError } from "../ai/gates";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
-import { getUserById, markDraftSeen, setRunState } from "../db/commands";
+import { getUserById, holdAutoPublish, markDraftSeen, setRunState } from "../db/commands";
 import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { retractPublished, retractTranslatedEdition } from "../modules/publishing";
@@ -43,7 +43,9 @@ export const drafts = new Hono<AuthedEnv>()
     const gates = ctx
       ? { derivatives: { setting: profileOf(ctx).gates.derivatives, ...(await derivativesGate.options(ctx)) }, publish: { setting: profileOf(ctx).gates.publish } }
       : null;
-    return c.json({ ...detail, gates });
+    // Spec §5.2: read-only for the creator — the admin flag, and this draft's warning/hold state.
+    const limits = await db.query.userLimits.findFirst({ where: eq(schema.userLimits.userId, c.get("userId")) });
+    return c.json({ ...detail, gates, autoPublish: limits?.autoPublish ?? false });
   })
 
   // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?, channels?,
@@ -182,7 +184,12 @@ export const drafts = new Hono<AuthedEnv>()
         return c.json({ error: "the run's instance is not reachable" }, 409);
       }
     }
-    return c.json({ error: "this draft is not waiting at the publish gate" }, 409);
+    // Spec §5.2: the one-tap Hold on the auto-publish warning — this draft stays in the queue.
+    if (draft.status === "pending_approval" && draft.autoPublishWarnedAt) {
+      await holdAutoPublish(db, draft.id);
+      return c.json({ ok: true, via: "auto-publish" });
+    }
+    return c.json({ error: "this draft is not waiting at the publish gate and has no auto-publish warning to hold" }, 409);
   })
 
   // FR-7.8: cancel a scheduled publish before publish_at

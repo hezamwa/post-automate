@@ -9,6 +9,7 @@ import { monthToDateUsd } from "../ai/meter";
 import { routeRejection } from "@post-automate/shared";
 import { createDb, schema } from "../db/client";
 import {
+  auditAutoPublish,
   deleteRouteCascade,
   deleteUserCascade,
   reactivateUser,
@@ -16,6 +17,8 @@ import {
   suspendUser,
   upsertUserLimits,
 } from "../db/commands";
+import { getActiveProfile } from "../modules/profiles";
+import { hasMedicalGuardrails } from "../modules/profiles/medical";
 import {
   latestHealthByRoute,
   listModels,
@@ -109,6 +112,7 @@ const limitsPatchSchema = z
     monthlyCapUsd: z.number().positive().optional(),
     maxRunsPerDay: z.number().int().positive().optional(),
     maxReqPerMin: z.number().int().positive().optional(),
+    autoPublish: z.boolean().optional(), // spec §5.2: admin-only, audited, never for a medical profile
   })
   .strict();
 
@@ -406,7 +410,6 @@ export const admin = new Hono<AuthedEnv>()
         role: schema.users.role,
         sanityProjectId: schema.users.sanityProjectId,
         sanityDataset: schema.users.sanityDataset,
-        autoPublish: schema.users.autoPublish,
         suspendedAt: schema.users.suspendedAt,
         suspendedReason: schema.users.suspendedReason,
         createdAt: schema.users.createdAt,
@@ -438,7 +441,6 @@ export const admin = new Hono<AuthedEnv>()
           role: parsed.data.role,
           sanityProjectId: parsed.data.sanityProjectId ?? null,
           sanityDataset: parsed.data.sanityDataset,
-          autoPublish: false, // approval for everyone initially (OD-4)
           passwordHash: await hashPassword(password),
         })
         .returning({ id: schema.users.id, email: schema.users.email });
@@ -514,6 +516,7 @@ export const admin = new Hono<AuthedEnv>()
       monthlyCapUsd: Number(row?.monthlyCapUsd ?? 10),
       maxRunsPerDay: row?.maxRunsPerDay ?? 2,
       maxReqPerMin: row?.maxReqPerMin ?? 30,
+      autoPublish: row?.autoPublish ?? false,
     };
     return c.json({ userId, limits, spentUsd: Number((await monthToDateUsd(db, userId)).toFixed(4)), isDefault: !row });
   })
@@ -524,10 +527,22 @@ export const admin = new Hono<AuthedEnv>()
     const userId = c.req.param("id");
     const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId) });
     if (!user) return c.json({ error: "user not found" }, 404);
+    const before = await db.query.userLimits.findFirst({ where: eq(schema.userLimits.userId, userId) });
+    if (parsed.data.autoPublish === true) {
+      // Spec §5.2 / FR-7.2: never for a profile with medical guardrails — whoever asks.
+      const profile = await getActiveProfile(db, userId).then((p) => p.profile).catch(() => null);
+      if (!profile) return c.json({ error: "Auto-publish needs an active profile to check for medical guardrails first (FR-7.2)." }, 409);
+      if (hasMedicalGuardrails(profile)) {
+        return c.json({ error: "Auto-publish cannot be enabled for a profile with medical guardrails — the reviewer is the compliance check (FR-7.2, spec §5.2)." }, 409);
+      }
+    }
     await upsertUserLimits(db, userId, parsed.data);
+    if (parsed.data.autoPublish != null && parsed.data.autoPublish !== (before?.autoPublish ?? false)) {
+      await auditAutoPublish(db, { userId, adminId: c.get("userId"), oldValue: before?.autoPublish ?? false, newValue: parsed.data.autoPublish });
+    }
     const row = await db.query.userLimits.findFirst({ where: eq(schema.userLimits.userId, userId) });
     return c.json({
       ok: true,
-      limits: { monthlyCapUsd: Number(row!.monthlyCapUsd), maxRunsPerDay: row!.maxRunsPerDay, maxReqPerMin: row!.maxReqPerMin },
+      limits: { monthlyCapUsd: Number(row!.monthlyCapUsd), maxRunsPerDay: row!.maxRunsPerDay, maxReqPerMin: row!.maxReqPerMin, autoPublish: row!.autoPublish },
     });
   });

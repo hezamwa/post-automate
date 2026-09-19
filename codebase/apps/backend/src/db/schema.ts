@@ -76,8 +76,6 @@ export const users = pgTable("users", {
   // the Worker resolves the token secret as SANITY_TOKEN_<PROJECTID>
   sanityProjectId: text("sanity_project_id"),
   sanityDataset: text("sanity_dataset").notNull().default("production"),
-  // Per-user approval flag (FR-7.1); the medical user must stay false (FR-7.2 — app invariant + seed)
-  autoPublish: boolean("auto_publish").notNull().default(false),
   // NULL = active. Reversible suspend (FR-2.7) — an account state, NOT a $0 spend cap:
   // refused at login/refresh with the reason, and in the AI/run gates (design §10.1)
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
@@ -201,6 +199,9 @@ export const drafts = pgTable("drafts", {
   // quality-check (spec §3 step 8): {passed, autoRevised, findings: [{check, ok, note}]} —
   // shown on the review screen; auto-publish (§5.2) requires passed without a revise.
   qualityCheck: jsonb("quality_check"),
+  // Auto-publish (spec §5.2): the 24-hour warning went out at …; the creator tapped Hold at ….
+  autoPublishWarnedAt: timestamp("auto_publish_warned_at", { withTimezone: true }),
+  autoPublishHeldAt: timestamp("auto_publish_held_at", { withTimezone: true }),
   publishAt: timestamp("publish_at", { withTimezone: true }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -352,6 +353,9 @@ export const userLimits = pgTable("user_limits", {
   monthlyCapUsd: numeric("monthly_cap_usd").notNull().default("10"),
   maxRunsPerDay: integer("max_runs_per_day").notNull().default(2),
   maxReqPerMin: integer("max_req_per_min").notNull().default(30),
+  // Spec §5.2: admin-only, default off, audited in app_config_audit, never settable for a
+  // medical profile (FR-7.2) — enforced in the API. Moved here from users.auto_publish.
+  autoPublish: boolean("auto_publish").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
