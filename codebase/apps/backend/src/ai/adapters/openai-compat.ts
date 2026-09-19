@@ -1,5 +1,6 @@
 import type { Capability, HealthStatus, ProviderId } from "@post-automate/shared";
 import type { Env } from "../../shared/env";
+import { systemText } from "../system";
 import type {
   ChatRequest,
   ChatResult,
@@ -28,9 +29,39 @@ const CONFIG = {
 
 type CompatProvider = keyof typeof CONFIG;
 
+interface CompletionUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+}
+interface ResponsesUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
+}
+
+// Both OpenAI APIs count cached tokens INSIDE the prompt total; the ledger wants the
+// uncached part and the cached part apart (FR-15.7), priced differently.
+export function usageFromCompletion(u: CompletionUsage | undefined): Usage {
+  const cached = u?.prompt_tokens_details?.cached_tokens ?? 0;
+  return {
+    inputTokens: u?.prompt_tokens == null ? undefined : u.prompt_tokens - cached,
+    outputTokens: u?.completion_tokens,
+    ...(cached ? { cacheReadTokens: cached } : {}),
+  };
+}
+export function usageFromResponses(u: ResponsesUsage | undefined): Usage {
+  const cached = u?.input_tokens_details?.cached_tokens ?? 0;
+  return {
+    inputTokens: u?.input_tokens == null ? undefined : u.input_tokens - cached,
+    outputTokens: u?.output_tokens,
+    ...(cached ? { cacheReadTokens: cached } : {}),
+  };
+}
+
 interface CompletionResponse {
   choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: CompletionUsage;
   error?: { message?: string; code?: string; type?: string } | string;
   code?: string;
 }
@@ -98,7 +129,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     const body: Record<string, unknown> = {
       model: req.model,
       tools: [{ type: toolType }],
-      instructions: req.system,
+      instructions: systemText(req.system),
       input: req.messages.map((m) => ({ role: m.role, content: m.content })),
       max_output_tokens: req.maxTokens ?? 6000,
     };
@@ -114,7 +145,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
       status?: string;
       incomplete_details?: { reason?: string };
       output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: ResponsesUsage;
       error?: { message?: string; code?: string };
     };
     if (!res.ok) {
@@ -136,11 +167,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
       .map((c) => c.text ?? "")
       .join("");
     const searches = (json.output ?? []).filter((o) => o.type === "web_search_call").length;
-    const usage: Usage = {
-      inputTokens: json.usage?.input_tokens,
-      outputTokens: json.usage?.output_tokens,
-      ...(searches ? { searches } : {}),
-    };
+    const usage: Usage = { ...usageFromResponses(json.usage), ...(searches ? { searches } : {}) };
     let parsed: unknown;
     if (req.jsonSchema) {
       try {
@@ -160,7 +187,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
       return responsesWithSearch(req);
     }
     const messages: Array<{ role: string; content: string }> = [];
-    let system = req.system ?? "";
+    let system = systemText(req.system);
     const nativeSchema = provider === "openai" && !!req.jsonSchema;
     if (req.jsonSchema && !nativeSchema) {
       system += `\n\nRespond ONLY with a single JSON object matching this JSON Schema — no prose, no markdown fences:\n${JSON.stringify(req.jsonSchema)}`;
@@ -188,10 +215,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
         `${provider} exhausted the output budget before any visible text (reasoning model) — raise maxTokens (model=${req.model})`,
       );
     }
-    const usage: Usage = {
-      inputTokens: res.usage?.prompt_tokens,
-      outputTokens: res.usage?.completion_tokens,
-    };
+    const usage = usageFromCompletion(res.usage);
 
     let parsed: unknown;
     if (req.jsonSchema) {

@@ -85,6 +85,13 @@
       "when": 1789733036237,
       "tag": "0011_remove-brave-provider",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789850279359,
+      "tag": "0012_cached-tokens",
+      "breakpoints": true
     }
   ]
 }

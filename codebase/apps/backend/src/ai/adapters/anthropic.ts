@@ -7,6 +7,7 @@ import type {
   HealthResult,
   ProviderAdapter,
   ProviderModel,
+  SystemBlock,
   Usage,
 } from "../types";
 
@@ -29,7 +30,7 @@ export function createAnthropicAdapter(env: Env): ProviderAdapter {
       max_tokens: req.maxTokens ?? 4096,
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
     };
-    if (req.system) params.system = req.system;
+    if (req.system) params.system = anthropicSystem(req.system);
     if (req.jsonSchema) {
       params.output_config = { format: { type: "json_schema", schema: req.jsonSchema } };
     }
@@ -108,9 +109,19 @@ export function createAnthropicAdapter(env: Env): ProviderAdapter {
   return { id: "anthropic", capabilities: ["chat", "search"], chat, healthCheck, listModels, classifyError };
 }
 
-function accumulateUsage(usage: Usage, response: Anthropic.Message): void {
-  usage.inputTokens = (usage.inputTokens ?? 0) + response.usage.input_tokens;
-  usage.outputTokens = (usage.outputTokens ?? 0) + response.usage.output_tokens;
+/** System string or blocks; a block flagged `cache` gets the ephemeral cache_control breakpoint. */
+export function anthropicSystem(system: string | SystemBlock[]): unknown {
+  if (typeof system === "string") return system;
+  return system.map((b) => ({ type: "text", text: b.text, ...(b.cache ? { cache_control: { type: "ephemeral" } } : {}) }));
+}
+
+/** input_tokens excludes cached tokens on this API — reads and writes are separate counters (FR-15.7). */
+export function accumulateUsage(usage: Usage, response: Pick<Anthropic.Message, "usage">): void {
+  const u = response.usage as Anthropic.Message["usage"] & { cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+  usage.inputTokens = (usage.inputTokens ?? 0) + u.input_tokens;
+  usage.outputTokens = (usage.outputTokens ?? 0) + u.output_tokens;
+  if (u.cache_read_input_tokens) usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + u.cache_read_input_tokens;
+  if (u.cache_creation_input_tokens) usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + u.cache_creation_input_tokens;
   const searches = (response.usage as { server_tool_use?: { web_search_requests?: number } })
     .server_tool_use?.web_search_requests;
   if (searches) usage.searches = (usage.searches ?? 0) + searches;

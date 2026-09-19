@@ -47,6 +47,8 @@ const routeBodySchema = z
 type PriceInput = {
   inputPerMTokUsd?: number | null;
   outputPerMTokUsd?: number | null;
+  cachedInputPerMTokUsd?: number | null;
+  cacheWritePerMTokUsd?: number | null;
   perImageUsd?: number | null;
   perSearchUsd?: number | null;
 };
@@ -59,7 +61,7 @@ type PriceColumns = { [K in keyof PriceInput]: string | null };
  */
 function toPriceColumns(body: PriceInput): PriceColumns {
   const out: PriceColumns = {};
-  for (const key of ["inputPerMTokUsd", "outputPerMTokUsd", "perImageUsd", "perSearchUsd"] as const) {
+  for (const key of ["inputPerMTokUsd", "outputPerMTokUsd", "cachedInputPerMTokUsd", "cacheWritePerMTokUsd", "perImageUsd", "perSearchUsd"] as const) {
     const value = body[key];
     if (value === undefined) continue;
     out[key] = value === null ? null : String(value);
@@ -70,6 +72,8 @@ function toPriceColumns(body: PriceInput): PriceColumns {
 const priceFields = {
   inputPerMTokUsd: z.number().nonnegative().nullish(),
   outputPerMTokUsd: z.number().nonnegative().nullish(),
+  cachedInputPerMTokUsd: z.number().nonnegative().nullish(),
+  cacheWritePerMTokUsd: z.number().nonnegative().nullish(),
   perImageUsd: z.number().nonnegative().nullish(),
   perSearchUsd: z.number().nonnegative().nullish(),
   notes: z.string().max(500).nullish(),

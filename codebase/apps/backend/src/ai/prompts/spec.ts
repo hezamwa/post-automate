@@ -1,3 +1,4 @@
+import { systemBlocks } from "../system";
 import type { ChatMessage, ChatRequest } from "../types";
 
 // What a prompt builder returns (spec §2 "prompts"): a pure description of one chat call.
@@ -19,7 +20,7 @@ export interface PromptSpec {
 /** Flatten a spec into the router's request shape. */
 export function toChatRequest(spec: PromptSpec, extra: { webSearch?: boolean } = {}): Omit<ChatRequest, "model"> {
   return {
-    system: spec.system.filter(Boolean).join("\n\n"),
+    system: systemBlocks(spec.system, spec.cacheBreakpointAfter),
     messages: spec.messages,
     ...(spec.jsonSchema ? { jsonSchema: spec.jsonSchema } : {}),
     maxTokens: spec.maxTokens,

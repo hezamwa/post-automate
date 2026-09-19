@@ -3,20 +3,61 @@ import type { CandidateRef } from "../../modules/discovery/types";
 import type { Angle, AngleProposals, Article } from "../../modules/generation/types";
 import type { RunContext } from "../context";
 import { type ApprovalEventPayload, waitForDraftDecision } from "../gates/draft";
-import { createSanityDraftStep } from "../steps/create-sanity-draft";
-import { derivatives } from "../steps/derivatives";
+import { runChannel } from "../steps/derive-channel";
+import { deriveLinkedIn } from "../steps/derive-linkedin";
+import { deriveX } from "../steps/derive-x";
 import { draft } from "../steps/draft";
+import { heroImage } from "../steps/hero-image";
 import { notify } from "../steps/notify";
-import { recordDerivativesStep } from "../steps/record-derivatives";
 import { runStep } from "../steps/step";
+import { translate } from "../steps/translate";
+import { writeSanityDraft } from "../steps/write-sanity-draft";
 
-// The revise / change_angle loop (spec §5, FR-7.9): at most 3 revisions per draft, each
-// one re-drafts, re-derives (v1 position — moves after approval later), rewrites the
-// Sanity draft keeping the hero image, pushes again and waits for the next decision.
-// revise re-enters at `draft` with instructions; change_angle re-enters from another of
-// the run's stored angles (at `outline` once that step exists).
+// The revise / change_angle loop (spec §5, FR-7.9): at most 3 revisions per draft. Each
+// re-drafts, rebuilds the reviewable draft (hero image kept), pushes again and waits for
+// the next decision. revise re-enters at `draft` with instructions; change_angle from
+// another of the run's stored angles (at `outline` once that step exists).
 
 export const MAX_REVISIONS = 3;
+
+export interface ReviewableInput {
+  draftId: string;
+  revisionNo: number;
+  article: Article;
+  provider: string;
+  model: string;
+  sourceUrls: string[];
+  existingAssetRef?: string;
+}
+
+export interface Reviewable {
+  sanityDocId: string;
+  assetRef?: string;
+}
+
+/**
+ * Everything between the article and the draft gate (spec §3 steps 11–13, plus the v1
+ * pre-approval derivatives until they move behind approval): one step per billable call.
+ */
+export async function reviewable(step: WorkflowStep, ctx: RunContext, input: ReviewableInput, suffix?: string): Promise<Reviewable> {
+  const { draftId, revisionNo, article } = input;
+  await runChannel(step, ctx, deriveX, { draftId, revisionNo, markdown: article.markdown }, suffix);
+  await runChannel(step, ctx, deriveLinkedIn, { draftId, revisionNo, markdown: article.markdown }, suffix);
+  await runStep(step, ctx, translate, { draftId, revisionNo, source: article }, suffix);
+  const hero = await runStep(step, ctx, heroImage, { draftId, revisionNo, article, existingAssetRef: input.existingAssetRef }, suffix);
+  const { sanityDocId } = await runStep(step, ctx, writeSanityDraft, {
+    draftId,
+    revisionNo,
+    article,
+    sourceUrls: input.sourceUrls,
+    provider: input.provider,
+    model: input.model,
+    imageAssetId: hero.assetRef,
+    revised: revisionNo > 0,
+  }, suffix);
+  await runStep(step, ctx, notify, { draftId, title: article.title, revised: revisionNo > 0 }, suffix);
+  return { sanityDocId, assetRef: hero.assetRef };
+}
 
 export interface ReviewState {
   draftId: string;
@@ -24,27 +65,22 @@ export interface ReviewState {
   angle: Angle;
   proposals: AngleProposals;
   article: Article;
-  sanity: { sanityDocId: string; imageAssetId?: string };
+  reviewable: Reviewable;
 }
 
 export interface ReviewOutcome {
   decision: ApprovalEventPayload;
   article: Article;
   angle: Angle;
-  sanity: ReviewState["sanity"];
+  reviewable: Reviewable;
 }
 
 function isRevision(d: ApprovalEventPayload): boolean {
   return d.action === "revise" || d.action === "change_angle";
 }
 
-export async function reviewLoop(
-  step: WorkflowStep,
-  ctx: RunContext,
-  state: ReviewState,
-  first: ApprovalEventPayload,
-): Promise<ReviewOutcome> {
-  let { article, angle, sanity } = state;
+export async function reviewLoop(step: WorkflowStep, ctx: RunContext, state: ReviewState, first: ApprovalEventPayload): Promise<ReviewOutcome> {
+  let { article, angle, reviewable: current } = state;
   let decision = first;
   let rev = 0;
   while (isRevision(decision)) {
@@ -62,7 +98,6 @@ export async function reviewLoop(
       const idx = Math.min(Math.max(decision.angleIndex ?? 0, 0), state.proposals.angles.length - 1);
       angle = state.proposals.angles[idx]!;
     }
-
     const revised = await runStep(step, ctx, draft, {
       topic: state.topic,
       angle,
@@ -73,27 +108,16 @@ export async function reviewLoop(
       },
     }, suffix);
     article = revised.article;
-
-    const derived = await runStep(step, ctx, derivatives, { article }, suffix);
-    const written = await runStep(step, ctx, createSanityDraftStep, {
-      draftId: state.draftId,
-      article,
-      texts: derived.texts,
-      sourceUrls: state.topic.sourceUrls,
-      provider: revised.provider,
-      model: revised.model,
-      existingImageAssetId: sanity.imageAssetId, // image kept unless instructions address it (FR-7.9)
-      revised: true,
-    }, suffix);
-    sanity = { sanityDocId: written.sanityDocId, imageAssetId: written.imageAssetId };
-    await runStep(step, ctx, recordDerivativesStep, {
+    current = await reviewable(step, ctx, {
       draftId: state.draftId,
       revisionNo: rev,
-      records: [...derived.outcomes, { kind: "hero_image", ...written.heroOutcome }],
+      article,
+      provider: revised.provider,
+      model: revised.model,
+      sourceUrls: state.topic.sourceUrls,
+      existingAssetRef: current.assetRef, // image kept unless instructions address it (FR-7.9)
     }, suffix);
-    await runStep(step, ctx, notify, { draftId: state.draftId, title: article.title, revised: true }, suffix);
-
     decision = await waitForDraftDecision(step, rev);
   }
-  return { decision, article, angle, sanity };
+  return { decision, article, angle, reviewable: current };
 }

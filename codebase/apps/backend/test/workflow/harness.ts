@@ -92,3 +92,8 @@ export async function seedCandidates(params: PipelineParams, briefs: Array<{ tit
   }
   return refs;
 }
+
+/** A global web_search route (Tavily) so the search step has somewhere to go. */
+export async function seedSearchRoute(): Promise<void> {
+  await shared.db.insert(schema.aiRoutes).values({ userId: null, taskType: "web_search", priority: 0, provider: "tavily", model: "tavily-search" });
+}

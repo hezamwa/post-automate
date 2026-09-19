@@ -10,6 +10,7 @@ import type {
   SearchResult,
   Usage,
 } from "../types";
+import { systemText } from "../system";
 import { AdapterHttpError } from "./openai-compat";
 
 // Google Gemini adapter (design §6.1). Raw fetch against the Generative Language API —
@@ -28,6 +29,22 @@ import { AdapterHttpError } from "./openai-compat";
 
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  cachedContentTokenCount?: number;
+}
+
+/** promptTokenCount includes cached tokens; split them out for the ledger (FR-15.7). */
+export function usageFromGemini(u: GeminiUsage | undefined): Usage {
+  const cached = u?.cachedContentTokenCount ?? 0;
+  return {
+    inputTokens: u?.promptTokenCount == null ? undefined : u.promptTokenCount - cached,
+    outputTokens: u?.candidatesTokenCount,
+    ...(cached ? { cacheReadTokens: cached } : {}),
+  };
+}
+
 interface GenerateContentResponse {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
@@ -37,7 +54,7 @@ interface GenerateContentResponse {
       groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
     };
   }>;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  usageMetadata?: GeminiUsage;
   error?: { message?: string; status?: string; code?: number };
 }
 
@@ -70,7 +87,7 @@ export function createGoogleAdapter(env: Env): ProviderAdapter {
       })),
       generationConfig,
     };
-    if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
+    if (req.system) body.systemInstruction = { parts: [{ text: systemText(req.system) }] };
     if (req.webSearch) body.tools = [{ google_search: {} }];
 
     const json = await call(req.model, body);
@@ -83,10 +100,7 @@ export function createGoogleAdapter(env: Env): ProviderAdapter {
       throw new Error(`Gemini returned no text (finishReason=${candidate.finishReason}, model=${req.model})`);
     }
 
-    const usage: Usage = {
-      inputTokens: json.usageMetadata?.promptTokenCount,
-      outputTokens: json.usageMetadata?.candidatesTokenCount,
-    };
+    const usage = usageFromGemini(json.usageMetadata);
     const searches = candidate?.groundingMetadata?.webSearchQueries?.length;
     if (searches) usage.searches = searches;
 
@@ -172,10 +186,7 @@ export function createGoogleAdapter(env: Env): ProviderAdapter {
       }),
     );
 
-    const usage: Usage = {
-      inputTokens: json.usageMetadata?.promptTokenCount,
-      outputTokens: json.usageMetadata?.candidatesTokenCount,
-    };
+    const usage = usageFromGemini(json.usageMetadata);
     const searches = candidate?.groundingMetadata?.webSearchQueries?.length;
     if (searches) usage.searches = searches;
 

@@ -58,7 +58,8 @@ export class FakeAi {
 
   search(args: RunSearchArgs) {
     this.calls.push({ taskType: "web_search", input: { messages: [{ role: "user", content: args.query }] } });
-    return { results: [], usage: { searches: 1 }, provider: "tavily", model: "tavily-search", costUsd: 0.008 };
+    const results = (this.overrides.get("web_search")?.(args as unknown as RunTaskArgs) as unknown[] | undefined) ?? [];
+    return { results, usage: { searches: 1 }, provider: "tavily", model: "tavily-search", costUsd: 0.008 };
   }
 
   callsFor(taskType: string) {

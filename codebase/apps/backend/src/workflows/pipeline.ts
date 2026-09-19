@@ -4,22 +4,19 @@ import { createRunContext, pinProfile, type PipelineParams } from "./context";
 import { chooseAngle } from "./gates/angle";
 import { applyGate } from "./gates/gate";
 import { draftGate, waitForDraftDecision } from "./gates/draft";
-import { reviewLoop } from "./loops/revise";
+import { reviewable, reviewLoop } from "./loops/revise";
 import { angles } from "./steps/angles";
-import { createSanityDraftStep } from "./steps/create-sanity-draft";
-import { derivatives } from "./steps/derivatives";
-import { discover } from "./steps/discover";
 import { draft } from "./steps/draft";
 import { entryGates } from "./steps/gates";
 import { loadProfile } from "./steps/load-profile";
-import { notify } from "./steps/notify";
 import { publish } from "./steps/publish";
 import { record } from "./steps/record";
-import { recordDerivativesStep } from "./steps/record-derivatives";
 import { research } from "./steps/research";
 import { saveDraft } from "./steps/save-draft";
 import { score } from "./steps/score";
+import { search } from "./steps/search";
 import { runStep } from "./steps/step";
+import { synthesizeCandidates } from "./steps/synthesize-candidates";
 
 export type { PipelineParams } from "./context";
 
@@ -46,10 +43,11 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     // 2. load-profile — pins the profile version for the whole run
     pinProfile(ctx, await runStep(step, ctx, loadProfile, {}));
 
-    // 3. topic — discover + score, or targeted research for a user topic
+    // 3. topic — snippet search feeds targeted research (user topic) or synthesis + scoring
+    const { results: fetched } = await runStep(step, ctx, search, { query: ctx.userTopic?.title });
     const topic = ctx.userTopic
-      ? await runStep(step, ctx, research, { userTopic: ctx.userTopic })
-      : await runStep(step, ctx, score, { candidates: await runStep(step, ctx, discover, {}) });
+      ? await runStep(step, ctx, research, { userTopic: ctx.userTopic, fetched })
+      : await runStep(step, ctx, score, { candidates: await runStep(step, ctx, synthesizeCandidates, { fetched }) });
     if (!topic) {
       await runStep(step, ctx, record, { outcome: "skipped", reason: "no candidate scored ≥6 (FR-5.2)", kind: "no_topic" }, "no-topic");
       return;
@@ -59,37 +57,23 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     const proposals = await runStep(step, ctx, angles, { topic });
     const angle = proposals.angles[await chooseAngle(step, ctx, proposals)]!;
 
-    // 7. draft
+    // 7. draft → 9. save-draft
     const drafted = await runStep(step, ctx, draft, { topic, angle });
-
-    // derivatives (v1 position — after approval once reordered)
-    const derived = await runStep(step, ctx, derivatives, { article: drafted.article });
-
-    // 9. save-draft
     const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown });
 
-    // hero image + Sanity draft (v1: one step) and the per-derivative rows
-    const sanity = await runStep(step, ctx, createSanityDraftStep, {
-      draftId,
-      article: drafted.article,
-      texts: derived.texts,
-      sourceUrls: topic.sourceUrls,
-      provider: drafted.provider,
-      model: drafted.model,
-      revised: false,
-    });
-    await runStep(step, ctx, recordDerivativesStep, {
+    // 11–13. derivatives (v1 position), hero image, Sanity draft, notify → draft gate
+    const built = await reviewable(step, ctx, {
       draftId,
       revisionNo: 0,
-      records: [...derived.outcomes, { kind: "hero_image", ...sanity.heroOutcome }],
+      article: drafted.article,
+      provider: drafted.provider,
+      model: drafted.model,
+      sourceUrls: topic.sourceUrls,
     });
-
-    // 13. notify → draft gate (with the revise / change_angle loop)
-    await runStep(step, ctx, notify, { draftId, title: drafted.article.title, revised: false });
     const review = await reviewLoop(
       step,
       ctx,
-      { draftId, topic, angle, proposals, article: drafted.article, sanity },
+      { draftId, topic, angle, proposals, article: drafted.article, reviewable: built },
       await waitForDraftDecision(step, 0),
     );
 
@@ -103,7 +87,7 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
         await runStep(step, ctx, record, {
           outcome: "rejected",
           draftId,
-          sanityDocId: review.sanity.sanityDocId,
+          sanityDocId: review.reviewable.sanityDocId,
           category: review.decision.rejectionCategory ?? "other",
         }, "reject");
         return;

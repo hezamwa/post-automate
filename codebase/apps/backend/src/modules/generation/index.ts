@@ -9,27 +9,15 @@ import { NoRouteError, runImageTask, runTask } from "../../ai/router";
 import { schema, type Db } from "../../db/client";
 import type { Env } from "../../shared/env";
 import { buildAnglesPrompt } from "../../workflows/prompts/angles";
-import { buildDeriveLinkedInPrompt, LINKEDIN_MAX_CHARS, type ShortenInput } from "../../workflows/prompts/derive-linkedin";
+import { buildDeriveLinkedInPrompt, LINKEDIN_MAX_CHARS } from "../../workflows/prompts/derive-linkedin";
 import { buildDeriveXPrompt, X_MAX_CHARS } from "../../workflows/prompts/derive-x";
 import { buildDraftPrompt } from "../../workflows/prompts/draft";
 import { buildHeroImagePrompt } from "../../workflows/prompts/hero-image";
 import { buildTranslatePrompt } from "../../workflows/prompts/translate";
 import type { TopicBrief } from "../discovery/types";
-import type {
-  Angle,
-  AngleProposals,
-  Article,
-  ArticleResult,
-  DerivedTexts,
-  TextDerivativeOutcome,
-} from "./types";
+import type { Angle, AngleProposals, Article, ArticleResult, TextDerivativeOutcome } from "./types";
 
 export type { Angle, AngleProposals, Article, ArticleResult, DerivedTexts, TextDerivativeOutcome } from "./types";
-
-export interface DeriveTextsResult {
-  texts: DerivedTexts;
-  outcomes: TextDerivativeOutcome[];
-}
 
 export class ComplianceRefusalError extends Error {
   constructor() {
@@ -82,66 +70,38 @@ function failureReason(e: unknown): string {
   return e instanceof Error ? e.message.slice(0, 300) : "unknown error";
 }
 
+export type ChannelKind = "x" | "linkedin";
+
+export const CHANNELS = {
+  x: { taskType: "shorten_x", build: buildDeriveXPrompt, maxChars: X_MAX_CHARS },
+  linkedin: { taskType: "shorten_linkedin", build: buildDeriveLinkedInPrompt, maxChars: LINKEDIN_MAX_CHARS },
+} as const;
+
 /**
- * FR-6.12/6.14 text derivatives — channel versions per profile.channels; translation only
- * when the profile opts in (FR-3.13). Skip-not-fail (FR-15.13, design §5): a missing or
- * unroutable derivative must not throw away a good article —
- *  · optional derivative, capability disabled (no enabled route) → `skipped`, continue;
- *  · optional derivative attempted but the call failed            → `failed`,  continue;
- *  · translation REQUESTED but unroutable or failing              → `failed` with the
- *    reason surfaced — a requested deliverable may not be silently dropped;
- *  · translation not requested → no outcome row at all (absent, not skipped).
- * Only the article task type may fail the run — that happens upstream in writeArticle.
+ * FR-6.12: ONE channel-version call (X or LinkedIn) from the final markdown. Pass the
+ * previous over-limit answer as `tooLong` for the corrective second pass — that pass is
+ * its own step, so a failed rewrite never re-bills the first call (spec §3).
  */
-export async function deriveTexts(env: Env, db: Db, ctx: RunCtx, article: Article): Promise<DeriveTextsResult> {
-  const channels = ctx.profile.channels ?? ["x", "linkedin"];
-  const texts: DerivedTexts = {};
-  const outcomes: TextDerivativeOutcome[] = [];
-
-  const channelTasks = [
-    { kind: "x" as const, taskType: "shorten_x" as const, build: buildDeriveXPrompt, maxChars: X_MAX_CHARS },
-    { kind: "linkedin" as const, taskType: "shorten_linkedin" as const, build: buildDeriveLinkedInPrompt, maxChars: LINKEDIN_MAX_CHARS },
-  ];
-  for (const t of channelTasks) {
-    if (!channels.includes(t.kind)) continue; // not asked for → absent, no row (design §5)
-    try {
-      const content = await boundedShorten(env, db, ctx, t.taskType, t.build, article.markdown, t.maxChars);
-      if (t.kind === "x") texts.xVersion = content;
-      else texts.linkedinVersion = content;
-      outcomes.push({ kind: t.kind, outcome: "produced", content });
-    } catch (e) {
-      // Gates (ai.paused, caps, suspension) are NOT derivative failures — they must halt
-      // the step (FR-15.12a "halting in-flight runs"); skip-not-fail covers routes and
-      // provider errors only (FR-15.13).
-      if (e instanceof GateError) throw e;
-      if (e instanceof NoRouteError) {
-        outcomes.push({
-          kind: t.kind,
-          outcome: "skipped",
-          reason: `The '${t.taskType}' capability is disabled — no enabled route (FR-15.13). Re-enable a route and revise the draft to generate it.`,
-        });
-      } else {
-        outcomes.push({ kind: t.kind, outcome: "failed", reason: failureReason(e) });
-      }
-    }
-  }
-
-  // targetLanguage is guaranteed by profileSchema when enabled (FR-3.13)
-  if (ctx.profile.translation.enabled && ctx.profile.translation.targetLanguage) {
-    const result = await runTranslation(env, db, ctx, {
-      title: article.title,
-      excerpt: article.excerpt,
-      imageAlt: article.imageAlt,
-      markdown: article.markdown,
-    }, ctx.profile.translation.targetLanguage);
-    if (result.outcome === "produced") texts.translatedMarkdown = result.content;
-    outcomes.push(result);
-  }
-  return { texts, outcomes };
+export async function deriveChannelText(
+  env: Env,
+  db: Db,
+  ctx: RunCtx,
+  kind: ChannelKind,
+  markdown: string,
+  tooLong?: string,
+): Promise<string> {
+  const channel = CHANNELS[kind];
+  const result = await runTask(env, db, {
+    taskType: channel.taskType,
+    userId: ctx.userId,
+    runId: ctx.runId,
+    input: toChatRequest(channel.build({ profile: ctx.profile, markdown, tooLong })),
+  });
+  return result.text.trim();
 }
 
-/** One translate call → a DR-9.14 outcome record. Requested-but-undeliverable is `failed`, never silent (FR-15.13). */
-async function runTranslation(
+/** FR-6.14: one translate call → a DR-9.14 outcome record. Requested-but-undeliverable is `failed`, never silent (FR-15.13). */
+export async function translateArticle(
   env: Env,
   db: Db,
   ctx: { userId: string; runId: string | null },
@@ -206,7 +166,7 @@ export async function translateDraft(
     targetLanguage: Language;
   },
 ): Promise<TextDerivativeOutcome & { revisionNo: number }> {
-  const result = await runTranslation(
+  const result = await translateArticle(
     env,
     db,
     { userId: args.userId, runId: args.runId },
@@ -254,45 +214,20 @@ export async function dropDraftTranslation(db: Db, draftId: string): Promise<boo
   return deleted.length > 0;
 }
 
-/** One retry with corrective feedback if the channel limit is exceeded; the reviewer is the final net. */
-async function boundedShorten(
-  env: Env,
-  db: Db,
-  ctx: RunCtx,
-  taskType: "shorten_x" | "shorten_linkedin",
-  build: (input: ShortenInput) => PromptSpec,
-  markdown: string,
-  maxChars: number,
-): Promise<string> {
-  const call = (tooLong?: string) =>
-    runTask(env, db, {
-      taskType,
-      userId: ctx.userId,
-      runId: ctx.runId,
-      input: toChatRequest(build({ profile: ctx.profile, markdown, tooLong })),
-    });
-  let text = (await call()).text.trim();
-  if (text.length > maxChars) {
-    const retry = (await call(text)).text.trim();
-    if (retry.length < text.length) text = retry;
-  }
-  return text;
-}
-
 /** FR-6.13: hero image. Returned as base64 — the publishing step uploads it to Sanity
  * immediately (image bytes must never be a Workflow step return value: too large). */
 export async function generateHeroImage(
   env: Env,
   db: Db,
   ctx: RunCtx,
-  article: Article,
-): Promise<{ imageBase64: string; mimeType: string; alt: string }> {
+  headline: string,
+): Promise<{ imageBase64: string; mimeType: string }> {
   const result = await runImageTask(env, db, {
     taskType: "image",
     userId: ctx.userId,
     runId: ctx.runId,
-    prompt: buildHeroImagePrompt({ headline: article.title, profile: ctx.profile }),
+    prompt: buildHeroImagePrompt({ headline, profile: ctx.profile }),
     size: "1536x1024",
   });
-  return { imageBase64: result.imageBase64, mimeType: result.mimeType, alt: article.imageAlt };
+  return { imageBase64: result.imageBase64, mimeType: result.mimeType };
 }

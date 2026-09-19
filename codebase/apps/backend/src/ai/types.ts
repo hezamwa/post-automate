@@ -7,9 +7,15 @@ export interface ChatMessage {
   content: string;
 }
 
+/** One system block; `cache` marks the prompt-caching breakpoint after it (design §6). */
+export interface SystemBlock {
+  text: string;
+  cache?: boolean;
+}
+
 export interface ChatRequest {
   model: string;
-  system?: string;
+  system?: string | SystemBlock[];
   messages: ChatMessage[];
   /** JSON schema for structured output; adapters map to the provider's native mechanism. */
   jsonSchema?: Record<string, unknown>;
@@ -18,8 +24,11 @@ export interface ChatRequest {
 }
 
 export interface Usage {
+  /** Uncached input tokens — cached reads and writes are reported separately (FR-15.7). */
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   searches?: number;
   images?: number;
   seconds?: number;

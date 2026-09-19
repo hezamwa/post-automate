@@ -53,3 +53,22 @@ describe("priceUsage (FR-15.4)", () => {
     expect(priceUsage(free, "google", "free-tier", { inputTokens: 1e6, outputTokens: 1e6 })).toBe(0);
   });
 });
+
+describe("priceUsage — prompt caching (design §6, spec §9)", () => {
+  const CACHED: ModelInfo[] = [
+    { provider: "anthropic", model: "claude-sonnet-5", capability: "chat", inputPerMTokUsd: 3, outputPerMTokUsd: 15, cachedInputPerMTokUsd: 0.3, cacheWritePerMTokUsd: 3.75 },
+    { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5 }, // no cached prices yet
+  ];
+
+  it("bills cache reads and writes at their own prices", () => {
+    expect(priceUsage(CACHED, "anthropic", "claude-sonnet-5", { inputTokens: 1e6, cacheReadTokens: 1e6, cacheWriteTokens: 1e6 })).toBeCloseTo(3 + 0.3 + 3.75, 10);
+  });
+
+  it("falls back to the FULL input price when the registry has no cached price — over-counts, never under-counts", () => {
+    expect(priceUsage(CACHED, "anthropic", "claude-haiku-4-5", { cacheReadTokens: 1e6, cacheWriteTokens: 1e6 })).toBeCloseTo(2, 10);
+  });
+
+  it("still refuses a model with no input price at all", () => {
+    expect(() => priceUsage(MODELS, "grok", "grok-4", { cacheReadTokens: 10 })).toThrow(/No input-token price/);
+  });
+});

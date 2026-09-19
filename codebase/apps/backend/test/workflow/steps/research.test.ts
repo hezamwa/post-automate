@@ -11,7 +11,7 @@ describe("research step", () => {
   it("bills one research call and persists a selected user candidate with its key facts", async () => {
     const userTopic = { title: "My own topic", links: ["https://x.example"] };
     const ctx = await stepContext({ userTopic });
-    const topic = await runStep(shared.step as never, ctx, research, { userTopic });
+    const topic = await runStep(shared.step as never, ctx, research, { userTopic, fetched: null });
     expect(shared.step.billedTasks("research")).toEqual(["research"]);
     expect(topic.summary).toContain("Key facts:\n- fact one");
     const rows = await candidateRows(ctx.runId);
@@ -22,6 +22,6 @@ describe("research step", () => {
 
   it("rejects an empty topic title", async () => {
     const ctx = await stepContext();
-    await expect(runStep(shared.step as never, ctx, research, { userTopic: { title: "" } })).rejects.toThrow(/String must contain/);
+    await expect(runStep(shared.step as never, ctx, research, { userTopic: { title: "" }, fetched: null })).rejects.toThrow(/String must contain/);
   });
 });

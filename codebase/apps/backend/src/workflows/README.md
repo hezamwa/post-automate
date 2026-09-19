@@ -9,23 +9,28 @@ an edit, not a rename cascade.
 |---|---|---|
 | 1 | `steps/gates.ts` — entry gates | [§3 step 1](../../../../../docs/article-workflow.md#3-inside-the-run-step-by-step) |
 | 2 | `steps/load-profile.ts` | §3 step 2 |
-| 3 | `steps/discover.ts` *(temporary, v1 — becomes `search` + `synthesize-candidates`)* | §3 steps 3a–3b |
+| 3a | `steps/search.ts` — snippet-only, one search | §3 step 3a |
+| 3b | `steps/synthesize-candidates.ts` | §3 step 3b |
 | 3c | `steps/score.ts` | §3 step 3c |
-| 3d | `steps/research.ts` — user-topic runs only | §3 step 3d |
+| 3d | `steps/research.ts` — user-topic runs only (after `search`) | §3 step 3d |
 | 5 | `steps/angles.ts` → `gates/angle.ts` | §3 step 5, §4.3 |
 | 7 | `steps/draft.ts` | §3 step 7 |
-| — | `steps/derivatives.ts` *(temporary, v1 — moves after approval as `derive-x`, `derive-linkedin`, `translate`)* | §3 steps 14–16 |
 | 9 | `steps/save-draft.ts` | §3 step 9 |
-| 11–12 | `steps/create-sanity-draft.ts` *(temporary, v1 — becomes `hero-image` + `write-sanity-draft`)* | §3 steps 11–12 |
-| — | `steps/record-derivatives.ts` *(temporary, v1)* | DR-9.14 |
+| 14–16 | `steps/derive-x.ts`, `steps/derive-linkedin.ts`, `steps/translate.ts` *(still before review until the reorder phase)* | §3 steps 14–16 |
+| 11 | `steps/hero-image.ts` | §3 step 11 |
+| 12 | `steps/write-sanity-draft.ts` | §3 step 12 |
 | 13 | `steps/notify.ts` → `gates/draft.ts` + `loops/revise.ts` | §3 step 13, §5 |
 | 17 | `steps/publish.ts` | §3 step 17, §6 |
 | 18 | `steps/record.ts` | §3 step 18 |
 
+`steps/derive-channel.ts` is the shape the two channel steps share, including the one
+corrective pass (its own step) when an answer runs over the channel limit.
+
 Contracts: `steps/step.ts` (`defineStep`, `runStep`, retry policies), `gates/gate.ts`
 (`defineGate`, `applyGate`), `gates/options.ts` (the one option shape), `context.ts`
 (`RunContext`). Prompts: one file per LLM call in `prompts/`, each exporting a
-`PROMPT_VERSION` and a pure builder.
+`PROMPT_VERSION` and a pure builder; the `draft` prompt sets the cache breakpoint after its
+stable prefix (design §6).
 
 Invariants (spec §3): one billable call per `step.do`; every step input and output is a
 zod schema, re-validated after Workflows deserialisation; emergency flags are re-read on

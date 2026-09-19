@@ -2,6 +2,7 @@
 // scoring. All AI calls go through the router (AR-10.9); prompts live in workflows/prompts.
 import { and, eq, gte } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
+import { GateError } from "../../ai/gates";
 import { toChatRequest } from "../../ai/prompts/spec";
 import { hasRouteFor, runSearch, runTask } from "../../ai/router";
 import { schema, type Db } from "../../db/client";
@@ -67,40 +68,39 @@ export async function checkTopicRequest(
   return { bannedCollisions, similarRecentTopics };
 }
 
+/** The snippet-only discovery query (spec §3 step 3a): the profile's interests, this week. */
+export function discoveryQuery(profile: Profile): string {
+  return `latest news and discussion in ${profile.domain.subNiches.join(", ")}`;
+}
+
 /**
- * Fetch real results when a 'web_search' route is configured, so the chat model synthesises
- * from them instead of searching for itself (FR-5.4). No route = the LLM-native path,
- * unchanged. A search that fails is not fatal: falling back to LLM-native search produces a
- * worse brief, never no brief.
+ * Spec §3 step 3a — snippet-only search on the 'web_search' route, so the chat model
+ * synthesises from real results instead of searching for itself (FR-5.4/5.8). One
+ * billable call. null = no route, or the route failed: the caller falls back to the
+ * LLM-native path — a worse brief beats no brief, so a dead search route is never fatal.
  */
-async function fetchResults(env: Env, db: Db, ctx: RunCtx, query: string): Promise<FetchedResult[] | undefined> {
-  if (!(await hasRouteFor(db, "web_search", ctx.userId))) return undefined;
+export async function searchSnippets(env: Env, db: Db, ctx: { userId: string; runId: string }, query: string): Promise<FetchedResult[] | null> {
+  if (!(await hasRouteFor(db, "web_search", ctx.userId))) return null;
   try {
-    const { results } = await runSearch(env, db, {
-      userId: ctx.userId,
-      runId: ctx.runId,
-      query,
-      count: 10,
-      freshness: "week",
-    });
-    return results.length > 0 ? results : undefined;
+    const { results } = await runSearch(env, db, { userId: ctx.userId, runId: ctx.runId, query, count: 10, freshness: "week" });
+    return results.length > 0 ? results : null;
   } catch (e) {
+    if (e instanceof GateError) throw e; // a pause or cap halts; it is not a search failure
     console.log("discovery: web_search route failed, falling back to LLM-native search", e instanceof Error ? e.message : e);
-    return undefined;
+    return null;
   }
 }
 
-/** FR-5.4: LLM + web search returns candidates; all are persisted (DR-9.3). */
-export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<CandidateRef[]> {
+/** Spec §3 step 3b (FR-5.4): snippets → 8–10 candidates, all persisted (DR-9.3). One call. */
+export async function synthesizeCandidates(env: Env, db: Db, ctx: RunCtx, fetched: FetchedResult[] | null): Promise<CandidateRef[]> {
   const recentTopics = await recentTopicTitles(db, ctx.userId);
-  const fetched = await fetchResults(env, db, ctx, `latest news and discussion in ${ctx.profile.domain.subNiches.join(", ")}`);
   const result = await runTask(env, db, {
     taskType: "discovery",
     userId: ctx.userId,
     runId: ctx.runId,
     // The model only searches when nothing was fetched for it — never both, which would
     // bill two searches for one brief.
-    input: toChatRequest(buildSynthesizeCandidatesPrompt({ profile: ctx.profile, recentTopics, fetched }), { webSearch: !fetched }),
+    input: toChatRequest(buildSynthesizeCandidatesPrompt({ profile: ctx.profile, recentTopics, fetched: fetched ?? undefined }), { webSearch: !fetched }),
   });
   const { candidates } = result.parsed as { candidates: TopicBrief[] };
   const refs: CandidateRef[] = [];
@@ -156,19 +156,19 @@ export async function scoreAndSelect(
   return best.candidate;
 }
 
-/** FR-5.8: targeted research for a user-chosen topic — replaces discover+score. */
+/** Spec §3 step 3d (FR-5.8): targeted research for a user-chosen topic — one call; the search came before it. */
 export async function researchTopic(
   env: Env,
   db: Db,
   ctx: RunCtx,
   userTopic: { title: string; notes?: string; links?: string[] },
+  fetched: FetchedResult[] | null,
 ): Promise<CandidateRef> {
-  const fetched = await fetchResults(env, db, ctx, userTopic.title);
   const result = await runTask(env, db, {
     taskType: "research",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: toChatRequest(buildResearchPrompt({ profile: ctx.profile, topic: userTopic, fetched }), { webSearch: !fetched }),
+    input: toChatRequest(buildResearchPrompt({ profile: ctx.profile, topic: userTopic, fetched: fetched ?? undefined }), { webSearch: !fetched }),
   });
   const brief = result.parsed as TopicBrief & { keyFacts: string[] };
   const summary = `${brief.summary}\n\nKey facts:\n- ${brief.keyFacts.join("\n- ")}`;

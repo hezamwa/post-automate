@@ -3,17 +3,15 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
 import { GateError } from "../../ai/gates";
-import { NoRouteError } from "../../ai/router";
 import { schema, type Db } from "../../db/client";
 import { getFlags } from "../../shared/flags";
 import type { Env } from "../../shared/env";
-import { generateHeroImage, type Article, type DerivedTexts } from "../generation";
+import type { Article, DerivedTexts } from "../generation";
 import {
   mapForProject,
   mapTranslatedForProject,
   translatedDocId,
   translationMetadataDoc,
-  type MapperInput,
 } from "./mappers";
 import {
   deleteDraft,
@@ -45,73 +43,54 @@ export function sanityDraftId(runId: string): string {
 }
 
 /**
- * Create the reviewable Sanity draft (FR-8.1..8.3, FR-6.13): generates the hero image,
- * uploads it, maps article+derivatives through the per-site mapper, writes drafts.*,
- * and points the drafts row at it. Image bytes stay inside this call.
+ * Spec §3 step 12 (FR-8.1..8.3): markdown → Portable Text through the per-site mapper,
+ * written as drafts.postauto-{runId} — a deterministic id, so a retried step replaces
+ * rather than duplicates — and the drafts row pointed at it. The hero image arrives as an
+ * asset reference from the hero-image step; bytes never pass through here.
  */
-export async function createSanityDraft(
+export async function writeSanityDraft(
   env: Env,
   db: Db,
   args: {
     user: PublishTargetUser;
     profile: Profile;
     runId: string;
-    draftId: string; // drafts table row
+    draftId: string;
     article: Article;
     texts: DerivedTexts;
     sourceUrls: string[];
     provider: string;
     model: string;
+    imageAssetId?: string;
     blogType?: "public" | "em";
-    /** Revisions keep the existing hero unless instructions address it (FR-7.9). */
-    existingImageAssetId?: string;
   },
-): Promise<{
-  sanityDocId: string;
-  imageAssetId?: string;
-  /** DR-9.14 outcome for the hero_image row — recorded by the pipeline's record step. */
-  heroOutcome: { outcome: "produced" | "skipped" | "failed"; assetRef?: string; reason?: string };
-}> {
+): Promise<{ sanityDocId: string }> {
   const target = targetOf(args.user);
-
-  let imageAssetId = args.existingImageAssetId;
-  // Revisions keep the image unless instructions address it (FR-7.9) — still `produced`.
-  let heroOutcome: { outcome: "produced" | "skipped" | "failed"; assetRef?: string; reason?: string } =
-    imageAssetId ? { outcome: "produced", assetRef: imageAssetId } : { outcome: "failed" };
-  if (!imageAssetId) {
-    try {
-      const hero = await generateHeroImage(env, db, { userId: args.user.id, runId: args.runId, profile: args.profile }, args.article);
-      imageAssetId = await uploadImageAsset(env, target, hero.imageBase64, hero.mimeType, `${args.article.slug}-hero.png`);
-      heroOutcome = { outcome: "produced", assetRef: imageAssetId };
-    } catch (e) {
-      if (e instanceof GateError) throw e; // ai.paused/caps halt the step (FR-15.12a), not degrade
-      // Skip-not-fail (FR-15.13): a missing hero image never kills the run — the reviewer
-      // sees WHY it is absent (DR-9.14): capability disabled = skipped; tried and lost = failed.
-      heroOutcome =
-        e instanceof NoRouteError
-          ? { outcome: "skipped", reason: "The 'image' capability is disabled — no enabled route (FR-15.13). Re-enable a route and revise the draft to generate it." }
-          : { outcome: "failed", reason: e instanceof Error ? e.message.slice(0, 300) : "unknown error" };
-      console.warn("hero image generation/upload failed — draft continues without image:", heroOutcome.reason);
-    }
-  }
-
-  const input: MapperInput = {
+  const doc = mapForProject(target.projectId, {
     article: args.article,
     texts: args.texts,
     profile: args.profile,
     runId: args.runId,
     provider: args.provider,
     model: args.model,
-    imageAssetId,
+    imageAssetId: args.imageAssetId,
     blogType: args.blogType,
-  };
-  const doc = mapForProject(target.projectId, input);
+  });
   (doc.generationMeta as { sourceUrls: string[] }).sourceUrls = args.sourceUrls;
-
   const sanityDocId = sanityDraftId(args.runId);
   await mutate(env, target, [{ createOrReplace: { ...doc, _id: sanityDocId } }]);
   await db.update(schema.drafts).set({ sanityDocumentId: sanityDocId }).where(eq(schema.drafts.id, args.draftId));
-  return { sanityDocId, imageAssetId, heroOutcome };
+  return { sanityDocId };
+}
+
+/** Upload generated hero bytes to Sanity assets; returns only the asset reference (spec §3 step 11). */
+export async function uploadHeroImage(
+  env: Env,
+  user: PublishTargetUser,
+  image: { imageBase64: string; mimeType: string },
+  slug: string,
+): Promise<string> {
+  return uploadImageAsset(env, targetOf(user), image.imageBase64, image.mimeType, `${slug}-hero.png`);
 }
 
 /** Patch the article body on an existing Sanity draft (approve-with-edits, FR-6.9). */

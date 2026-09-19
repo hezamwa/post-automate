@@ -30,6 +30,10 @@ export function priceUsage(
   };
   if (usage.inputTokens) cost += (usage.inputTokens / 1e6) * need(info.inputPerMTokUsd, "input-token");
   if (usage.outputTokens) cost += (usage.outputTokens / 1e6) * need(info.outputPerMTokUsd, "output-token");
+  // Cached tokens without a cached price fall back to the FULL input price: the ledger may
+  // over-count until the registry knows the discount, never under-count (spec §9).
+  if (usage.cacheReadTokens) cost += (usage.cacheReadTokens / 1e6) * (info.cachedInputPerMTokUsd ?? need(info.inputPerMTokUsd, "input-token"));
+  if (usage.cacheWriteTokens) cost += (usage.cacheWriteTokens / 1e6) * (info.cacheWritePerMTokUsd ?? need(info.inputPerMTokUsd, "input-token"));
   if (usage.searches) cost += usage.searches * need(info.perSearchUsd, "per-search");
   if (usage.images) cost += usage.images * need(info.perImageUsd, "per-image");
   return cost;
@@ -56,6 +60,8 @@ export async function recordSpend(
     provider: args.provider,
     model: args.model,
     units: args.usage,
+    cacheReadTokens: args.usage.cacheReadTokens ?? null,
+    cacheWriteTokens: args.usage.cacheWriteTokens ?? null,
     estCostUsd: cost.toFixed(6),
   });
   return cost;

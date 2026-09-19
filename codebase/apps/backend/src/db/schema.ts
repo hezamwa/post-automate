@@ -221,7 +221,10 @@ export const spendLedger = pgTable("spend_ledger", {
   taskType: text("task_type").notNull(), // TaskType from @post-automate/shared
   provider: text("provider").notNull(),
   model: text("model").notNull(),
-  units: jsonb("units").notNull(), // {inputTokens?, outputTokens?, searches?, images?, seconds?}
+  units: jsonb("units").notNull(), // {inputTokens?, outputTokens?, cacheReadTokens?, cacheWriteTokens?, searches?, images?, seconds?}
+  // Prompt-cache tokens as columns too, so the budget breakdown can sum them (spec §5).
+  cacheReadTokens: integer("cache_read_tokens"),
+  cacheWriteTokens: integer("cache_write_tokens"),
   estCostUsd: numeric("est_cost_usd").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -240,6 +243,10 @@ export const aiModels = pgTable(
     capability: modelCapability("capability").notNull(),
     inputPerMTokUsd: numeric("input_per_mtok_usd"),
     outputPerMTokUsd: numeric("output_per_mtok_usd"),
+    // Prompt caching (design §6): read and write prices per million cached tokens. NULL =
+    // bill cached tokens at the input price, which over-counts rather than under-counts.
+    cachedInputPerMTokUsd: numeric("cached_input_per_mtok_usd"),
+    cacheWritePerMTokUsd: numeric("cache_write_per_mtok_usd"),
     perImageUsd: numeric("per_image_usd"),
     perSearchUsd: numeric("per_search_usd"),
     notes: text("notes"),

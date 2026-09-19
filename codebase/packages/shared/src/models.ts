@@ -13,6 +13,9 @@ export interface ModelInfo {
   capability: "chat" | "image" | "tts" | "video" | "search";
   inputPerMTokUsd?: number;
   outputPerMTokUsd?: number;
+  /** Prompt-cache read / write prices; absent → billed at the input price (never undercounts). */
+  cachedInputPerMTokUsd?: number;
+  cacheWritePerMTokUsd?: number;
   perImageUsd?: number;
   perSearchUsd?: number;
   notes?: string | null;
