@@ -1,6 +1,6 @@
 import type { HealthStatus } from "@post-automate/shared";
 import type { Env } from "../../shared/env";
-import type { HealthResult, ProviderAdapter, SearchRequest, SearchResult } from "../types";
+import type { ExtractRequest, ExtractResult, HealthResult, ProviderAdapter, SearchRequest, SearchResult } from "../types";
 import { AdapterHttpError } from "./openai-compat";
 
 // Tavily adapter — SEARCH capability only, no chat. This is the provider behind the
@@ -12,7 +12,8 @@ import { AdapterHttpError } from "./openai-compat";
 const BASE_URL = "https://api.tavily.com";
 
 interface TavilyResponse {
-  results?: Array<{ title?: string; url?: string; content?: string; published_date?: string }>;
+  results?: Array<{ title?: string; url?: string; content?: string; raw_content?: string; published_date?: string }>;
+  failed_results?: Array<{ url?: string; error?: string }>;
   detail?: { error?: string } | string;
   error?: string;
 }
@@ -66,6 +67,21 @@ export function createTavilyAdapter(env: Env): ProviderAdapter {
     };
   }
 
+  /**
+   * Full page content (article-workflow §3 step 4). Tavily bills extract per 5 urls, so
+   * usage counts one "search" per started block of five — the registry's per-search price
+   * is the unit. Pages Tavily could not fetch are simply absent from the result.
+   */
+  async function extract(req: ExtractRequest): Promise<ExtractResult> {
+    const json = await post("/extract", { urls: req.urls });
+    return {
+      pages: (json.results ?? [])
+        .filter((r) => r.url && (r.raw_content ?? r.content))
+        .map((r) => ({ url: r.url!, ...(r.title ? { title: r.title } : {}), content: r.raw_content ?? r.content ?? "" })),
+      usage: { searches: Math.max(1, Math.ceil(req.urls.length / 5)) },
+    };
+  }
+
   async function healthCheck(model: string): Promise<HealthResult> {
     const started = Date.now();
     try {
@@ -87,7 +103,7 @@ export function createTavilyAdapter(env: Env): ProviderAdapter {
     }
   }
 
-  return { id: "tavily", capabilities: ["search"], search, healthCheck, classifyError: classifyTavilyError };
+  return { id: "tavily", capabilities: ["search"], search, extract, healthCheck, classifyError: classifyTavilyError };
 }
 
 export function classifyTavilyError(e: unknown): { status: HealthStatus; code?: number } {

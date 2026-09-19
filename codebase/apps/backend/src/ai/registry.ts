@@ -22,6 +22,9 @@ export const DEFAULT_ROUTES: ReadonlyArray<{
   { taskType: "shorten_x", provider: "anthropic", model: "claude-haiku-4-5" },
   { taskType: "shorten_linkedin", provider: "anthropic", model: "claude-haiku-4-5" },
   { taskType: "translate", provider: "anthropic", model: "claude-sonnet-5" },
+  { taskType: "outline", provider: "anthropic", model: "claude-haiku-4-5" },
+  { taskType: "quality_check", provider: "anthropic", model: "claude-haiku-4-5" },
+  { taskType: "image_concepts", provider: "anthropic", model: "claude-haiku-4-5" },
   { taskType: "image", provider: "openai", model: "gpt-image-1" },
   // OpenAI fallbacks (verified live 2026-07-16) — used automatically on
   // anthropic auth/quota/rate-limit/5xx failures (FR-15.6). Discovery/research
@@ -35,5 +38,8 @@ export const DEFAULT_ROUTES: ReadonlyArray<{
   { taskType: "shorten_x", provider: "openai", model: "gpt-5-mini", priority: 1 },
   { taskType: "shorten_linkedin", provider: "openai", model: "gpt-5-mini", priority: 1 },
   { taskType: "translate", provider: "openai", model: "gpt-5-mini", priority: 1 },
+  { taskType: "outline", provider: "openai", model: "gpt-5-mini", priority: 1 },
+  { taskType: "quality_check", provider: "openai", model: "gpt-5-mini", priority: 1 },
+  { taskType: "image_concepts", provider: "openai", model: "gpt-5-mini", priority: 1 },
   // voice / video / code_snippet: routing-ready, no route seeded (FR-6.15)
 ];

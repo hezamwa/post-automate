@@ -18,7 +18,7 @@ async function topicFor(ctx: Awaited<ReturnType<typeof stepContext>>) {
 describe("draft step", () => {
   it("bills one article call from the topic brief and the chosen angle", async () => {
     const ctx = await stepContext();
-    const out = await runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[2]! });
+    const out = await runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[2]!, outline: null });
     expect(shared.step.billedTasks("draft")).toEqual(["article"]);
     expect(out).toMatchObject({ article: article(), provider: "anthropic", model: "claude-sonnet-5" });
     expect(shared.ai.callsFor("article")[0]!.input.messages[0]!.content).toContain("Headline: Angle two");
@@ -28,7 +28,7 @@ describe("draft step", () => {
     const ctx = await stepContext();
     shared.ai.respondWith("article", () => article("CANNOT_COMPLY"));
     expect(draft.nonRetryable).toContain(ComplianceRefusalError);
-    await expect(runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[0]! })).rejects.toThrow(NonRetryableError);
+    await expect(runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[0]!, outline: null })).rejects.toThrow(NonRetryableError);
     expect(shared.step.attempts.get("draft")).toBe(1);
   });
 
@@ -38,6 +38,7 @@ describe("draft step", () => {
     await runStep(shared.step as never, ctx, draft, {
       topic: await topicFor(ctx),
       angle: ANGLES[0]!,
+      outline: null,
       revision: { draftId, revisionNo: 1, instructions: "tighter", currentMarkdown: "# Old" },
     }, "rev1");
     const prompt = shared.ai.callsFor("article")[0]!.input.messages[0]!.content;
@@ -50,7 +51,7 @@ describe("draft step", () => {
   it("a change_angle revision writes fresh from the new angle with no instructions row", async () => {
     const ctx = await stepContext();
     const draftId = await seedDraftRow(ctx);
-    await runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[1]!, revision: { draftId, revisionNo: 1 } }, "rev1");
+    await runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[1]!, outline: null, revision: { draftId, revisionNo: 1 } }, "rev1");
     expect(shared.ai.callsFor("article")[0]!.input.messages[0]!.content).toContain("Headline: Angle one");
     expect(await revisionRows(draftId)).toHaveLength(0);
   });

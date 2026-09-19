@@ -28,6 +28,9 @@ export const TASK_TYPES = [
   "shorten_x",
   "shorten_linkedin",
   "translate",
+  "outline", // section headings + key points for the chosen angle (article-workflow §3 step 6)
+  "quality_check", // the finished article checked before review (§3 step 8)
+  "image_concepts", // 2–3 hero concepts as text, before any image is generated (§3 step 10)
   "image",
   "voice",
   "video",
@@ -56,6 +59,9 @@ export const TASK_CAPABILITY: Record<TaskType, Capability> = {
   shorten_x: "chat",
   shorten_linkedin: "chat",
   translate: "chat",
+  outline: "chat",
+  quality_check: "chat",
+  image_concepts: "chat",
   image: "image",
   voice: "tts",
   video: "video",

@@ -145,6 +145,8 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   gate: text("gate"),
   chosenTopicId: uuid("chosen_topic_id").references((): AnyPgColumn => topicCandidates.id), // typed: the two tables reference each other
   chosenAngleIndex: integer("chosen_angle_index"),
+  // The (approved) outline the draft was written from (spec §3 step 6): {sections: [{heading, keyPoints}]}
+  outline: jsonb("outline"),
   state: runState("state").notNull().default("discovering"), // DR-9.4
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
@@ -190,6 +192,9 @@ export const drafts = pgTable("drafts", {
   stale: boolean("stale").notNull().default(false),
   // First GET /drafts/:id by the owner (spec §5.2 auto-publish condition, reminder muting).
   seenAt: timestamp("seen_at", { withTimezone: true }),
+  // quality-check (spec §3 step 8): {passed, autoRevised, findings: [{check, ok, note}]} —
+  // shown on the review screen; auto-publish (§5.2) requires passed without a revise.
+  qualityCheck: jsonb("quality_check"),
   publishAt: timestamp("publish_at", { withTimezone: true }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -358,3 +363,18 @@ export const gateChoices = pgTable("gate_choices", {
   source: text("source").notNull().default("user"),
   chosenAt: timestamp("chosen_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// fetch-sources output (spec §3 step 4, brief §5): the chosen topic's pages, fetched once
+// per run so a retried or revised draft never refetches. Content is truncated on write.
+export const sources = pgTable(
+  "sources",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull().references(() => pipelineRuns.id),
+    url: text("url").notNull(),
+    title: text("title"),
+    content: text("content").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("sources_run_url").on(t.runId, t.url)],
+);

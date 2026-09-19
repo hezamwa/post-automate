@@ -7,7 +7,7 @@ import { getAdapter } from "./adapters";
 import { assertAiAllowed } from "./gates";
 import { errorMessage, primaryRouteFailedTwice } from "./health";
 import { recordSpend } from "./meter";
-import type { ChatRequest, ChatResult, SearchResult } from "./types";
+import type { ChatRequest, ChatResult, ExtractResult, SearchResult } from "./types";
 
 /** FR-15.6: record the failure, and push to admins when a PRIMARY route fails twice running. */
 async function recordRouteFailure(
@@ -238,6 +238,49 @@ export async function runSearch(env: Env, db: Db, args: RunSearchArgs): Promise<
   throw new Error(
     `All ${routes.length} route(s) failed for task 'web_search': ${failures.join("; ")}. See ai_health_checks for details (FR-15.6).`,
   );
+}
+
+export interface RunExtractArgs {
+  userId: string | null;
+  runId?: string | null;
+  urls: string[];
+}
+
+export interface RunExtractResult extends ExtractResult {
+  provider: ProviderId;
+  model: string;
+  costUsd: number;
+}
+
+/**
+ * Full-content fetch through the 'web_search' route (article-workflow §3 step 4): the
+ * chosen topic's pages, once, instead of ten shallow snippets. Same gates, fallback,
+ * metering and alerts as runSearch; a route whose provider has no extract endpoint is
+ * skipped in the chain.
+ */
+export async function runExtract(env: Env, db: Db, args: RunExtractArgs): Promise<RunExtractResult> {
+  const gate = await assertAiAllowed(db, args.userId);
+  const routes = await resolveRoutes(db, "web_search", args.userId);
+  if (routes.length === 0) throw new NoRouteError("web_search");
+  const failures: string[] = [];
+  for (const route of routes) {
+    const provider = route.provider as ProviderId;
+    const adapter = getAdapter(provider, env);
+    if (!adapter.extract) {
+      failures.push(`${provider}: no extract capability`);
+      continue;
+    }
+    try {
+      const result = await adapter.extract({ model: route.model, urls: args.urls });
+      const costUsd = await recordSpend(db, { userId: args.userId, runId: args.runId, taskType: "web_search", provider, model: route.model, usage: result.usage });
+      await maybeBudgetAlerts(env, db, { gate, costUsd, userId: args.userId });
+      return { ...result, provider, model: route.model, costUsd };
+    } catch (e) {
+      const status = await recordRouteFailure(env, db, route, "web_search", e);
+      failures.push(`${provider}/${route.model} → ${status}`);
+    }
+  }
+  throw new Error(`All ${routes.length} route(s) failed for extract on task 'web_search': ${failures.join("; ")}. See ai_health_checks (FR-15.6).`);
 }
 
 /** Is a task routable at all? Lets a caller choose a path instead of catching NoRouteError. */

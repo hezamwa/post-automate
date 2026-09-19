@@ -95,6 +95,7 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
       stale: draft.stale, // spec §5.1: revise / change_angle greyed out; approve / reject still work
       seenAt: draft.seenAt,
       channels: draft.channels,
+      qualityCheck: draft.qualityCheck, // spec §3 step 8: findings shown on the review screen
       publishAt: draft.publishAt,
       createdAt: draft.createdAt,
       decidedAt: draft.decidedAt,
@@ -112,7 +113,7 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
         revisionNo: r.revisionNo,
       })),
     run: run
-      ? { state: run.state, trigger: run.trigger, angleProposals: run.angleProposals }
+      ? { state: run.state, trigger: run.trigger, angleProposals: run.angleProposals, outline: run.outline }
       : null,
   };
 }
@@ -313,4 +314,9 @@ export async function scoredCandidates(db: Db, runId: string) {
 
 export async function gateChoicesForRun(db: Db, runId: string) {
   return db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, runId)).orderBy(asc(schema.gateChoices.chosenAt));
+}
+
+/** The run's fetched sources (spec §3 step 4) — the draft's grounding. */
+export async function sourcesForRun(db: Db, runId: string) {
+  return db.select().from(schema.sources).where(eq(schema.sources.runId, runId)).orderBy(asc(schema.sources.fetchedAt));
 }

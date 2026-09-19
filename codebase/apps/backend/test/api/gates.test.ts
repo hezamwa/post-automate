@@ -88,3 +88,15 @@ describe("POST /runs/:id/gates/:gate", () => {
     expect(pipeline.instances.get(params.runId)?.events).toEqual([{ type: "gate-angle", payload: { optionId: "2" } }]);
   });
 });
+
+describe("POST /runs/:id/gates/outline", () => {
+  it("accepts approve, edited sections, or free text", async () => {
+    const { env, pipeline, params, token } = await waitingOnTopic();
+    await setRunGate(shared.db, params.runId, "outline");
+    expect((await call(env, `/runs/${params.runId}/gates/outline`, { method: "POST", token, body: { optionId: "approve" } })).status).toBe(200);
+    expect((await call(env, `/runs/${params.runId}/gates/outline`, { method: "POST", token, body: { sections: [{ heading: "A", keyPoints: [] }, { heading: "B", keyPoints: ["x"] }] } })).status).toBe(200);
+    expect((await call(env, `/runs/${params.runId}/gates/outline`, { method: "POST", token, body: { freeText: "another angle on it" } })).status).toBe(200);
+    expect((await call(env, `/runs/${params.runId}/gates/outline`, { method: "POST", token, body: { optionId: "reject" } })).status).toBe(400);
+    expect(pipeline.instances.get(params.runId)?.events.map((e) => e.type)).toEqual(["gate-outline", "gate-outline", "gate-outline"]);
+  });
+});

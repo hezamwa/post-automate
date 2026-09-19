@@ -12,7 +12,7 @@ describe("save-draft step", () => {
   it("creates the pending draft with topic, angle and markdown", async () => {
     const ctx = await stepContext();
     const [topic] = await seedCandidates(ctx, CANDIDATES.slice(0, 1));
-    const { id } = await runStep(shared.step as never, ctx, saveDraft, { topicId: topic!.id, angle: ANGLES[1]!, markdown: "# Body" });
+    const { id } = await runStep(shared.step as never, ctx, saveDraft, { topicId: topic!.id, angle: ANGLES[1]!, markdown: "# Body", qualityCheck: null });
     expect(await draftRow(ctx.runId)).toMatchObject({ id, topicId: topic!.id, angle: ANGLES[1], markdown: "# Body", status: "pending_approval" });
     expect(shared.step.bills).toEqual([]);
   });

@@ -82,6 +82,23 @@ export interface SearchResult {
   usage: Usage;
 }
 
+/** Full-content fetch of chosen pages (article-workflow §3 step 4) — the search provider's extract endpoint. */
+export interface ExtractRequest {
+  model?: string;
+  urls: string[];
+}
+
+export interface ExtractedPage {
+  url: string;
+  title?: string;
+  content: string;
+}
+
+export interface ExtractResult {
+  pages: ExtractedPage[];
+  usage: Usage;
+}
+
 /** A model as the provider's own catalogue reports it (FR-15.4 registry assist). */
 export interface ProviderModel {
   id: string;
@@ -99,6 +116,8 @@ export interface ProviderAdapter {
   generateImage?(req: ImageRequest): Promise<ImageResult>;
   /** Raw web search (Brave) — feeds discovery/research as a two-step alternative to LLM-native search. */
   search?(req: SearchRequest): Promise<SearchResult>;
+  /** Full page content for given urls (fetch-sources); absent on providers without an extract endpoint. */
+  extract?(req: ExtractRequest): Promise<ExtractResult>;
   /** capability: what the model is, so the canary picks a matching probe (FR-15.5). Defaults to chat. */
   healthCheck(model: string, capability?: Capability): Promise<HealthResult>;
   /** The provider's live model catalogue; absent when it publishes no listing endpoint. */

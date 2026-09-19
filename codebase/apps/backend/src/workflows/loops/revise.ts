@@ -1,18 +1,20 @@
 import type { WorkflowStep } from "cloudflare:workers";
 import type { CandidateRef } from "../../modules/discovery/types";
-import type { Angle, AngleProposals, Article } from "../../modules/generation/types";
+import type { Angle, AngleProposals, Article, Outline } from "../../modules/generation/types";
 import type { RunContext } from "../context";
 import { type ApprovalEventPayload, waitForDraftDecision } from "../gates/draft";
-import { draft } from "../steps/draft";
+import { chooseOutline } from "../gates/outline";
 import { heroImage } from "../steps/hero-image";
 import { notify } from "../steps/notify";
 import { runStep } from "../steps/step";
 import { writeSanityDraft } from "../steps/write-sanity-draft";
+import { draftWithQualityCheck } from "./quality";
 
 // The revise / change_angle loop (spec §5, FR-7.9): at most 3 revisions per draft. Each
-// re-drafts, rebuilds the reviewable draft (hero image kept), pushes again and waits for
-// the next decision. revise re-enters at `draft` with instructions; change_angle from
-// another of the run's stored angles (at `outline` once that step exists).
+// re-drafts, re-runs quality-check, rebuilds the reviewable draft (hero image kept),
+// pushes again and waits for the next decision. revise re-enters at `draft` with
+// instructions; change_angle re-enters at `outline` (gate applies) from another of the
+// run's stored angles.
 
 export const MAX_REVISIONS = 3;
 
@@ -56,6 +58,7 @@ export interface ReviewState {
   draftId: string;
   topic: CandidateRef;
   angle: Angle;
+  outline: Outline | null;
   proposals: AngleProposals;
   article: Article;
   reviewable: Reviewable;
@@ -73,7 +76,7 @@ function isRevision(d: ApprovalEventPayload): boolean {
 }
 
 export async function reviewLoop(step: WorkflowStep, ctx: RunContext, state: ReviewState, first: ApprovalEventPayload): Promise<ReviewOutcome> {
-  let { article, angle, reviewable: current } = state;
+  let { article, angle, outline, reviewable: current } = state;
   let decision = first;
   let rev = 0;
   while (isRevision(decision)) {
@@ -90,16 +93,19 @@ export async function reviewLoop(step: WorkflowStep, ctx: RunContext, state: Rev
     if (changingAngle) {
       const idx = Math.min(Math.max(decision.angleIndex ?? 0, 0), state.proposals.angles.length - 1);
       angle = state.proposals.angles[idx]!;
+      outline = await chooseOutline(step, ctx, { topic: state.topic, angle }, suffix); // re-enters at outline (spec §5)
     }
-    const revised = await runStep(step, ctx, draft, {
+    const { drafted: revised } = await draftWithQualityCheck(step, ctx, {
       topic: state.topic,
       angle,
+      outline,
       revision: {
         draftId: state.draftId,
         revisionNo: rev,
         ...(changingAngle ? {} : { instructions: decision.instructions ?? "", currentMarkdown: article.markdown }),
       },
-    }, suffix);
+      autoRevise: false,
+    }, suffix); // the quality-check step keeps the verdict on the draft (draftId given)
     article = revised.article;
     current = await reviewable(step, ctx, {
       draftId: state.draftId,

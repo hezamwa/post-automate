@@ -15,7 +15,7 @@ import { article } from "./mocks";
 beforeEach(resetShared);
 
 const approve = (extra: Record<string, unknown> = {}) => ({ type: "approval", payload: { action: "approve", publishMode: "now", ...extra } });
-const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "gate-topic", "angles", "gate-angle", "draft", "save-draft", "hero-image", "write-sanity-draft", "notify"];
+const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "gate-topic", "fetch-sources", "angles", "gate-angle", "outline", "gate-outline", "draft", "quality-check", "save-draft", "hero-image", "write-sanity-draft", "notify"];
 const AFTER_APPROVE = ["gate-draft", "derive-x", "derive-linkedin", "translate", "publish"];
 
 describe("scheduled/manual run", () => {
@@ -41,7 +41,7 @@ describe("scheduled/manual run", () => {
     expect(shared.pushes.map((p) => p.title)).toEqual(["Draft ready for review"]);
     // auto gates still log their choices (spec §4.3 preference signal)
     const choices = await shared.db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, params.runId));
-    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "auto"], ["angle", "auto"], ["draft", "user"]]);
+    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "auto"], ["angle", "auto"], ["outline", "auto"], ["draft", "user"]]);
     expect(shared.step.billingViolations()).toEqual([]);
   });
 
@@ -63,6 +63,12 @@ describe("scheduled/manual run", () => {
     const synth = shared.ai.callsFor("discovery")[0]!.input;
     expect(synth.webSearch).toBe(false);
     expect(synth.messages[0]!.content).toContain("Fetched headline");
+    // and the chosen topic's pages were fetched in full, once, and grounded the outline and the draft
+    expect(shared.step.billedTasks("fetch-sources")).toEqual(["web_search"]);
+    expect(shared.ai.callsFor("outline")[0]!.input.messages[0]!.content).toContain("Full content of https://a.example");
+    expect(shared.ai.callsFor("article")[0]!.input.messages[0]!.content).toContain("Full content of https://a.example");
+    expect(shared.ai.callsFor("article")[0]!.input.messages[0]!.content).toContain("APPROVED OUTLINE");
+    expect((await draftRow(params.runId))?.qualityCheck).toMatchObject({ passed: true, autoRevised: false });
     expect(shared.step.billingViolations()).toEqual([]);
   });
 
@@ -172,7 +178,7 @@ describe("user-topic run", () => {
     shared.ai.respondWith("web_search", () => [{ title: "Primary source", url: "https://src.example", snippet: "…" }]);
     shared.step.script({ type: "gate-angle", payload: { optionId: "0" } }, approve());
     await runWorkflow(params);
-    expect(shared.step.executed.slice(0, 5)).toEqual(["gates", "load-profile", "search", "research", "angles"]);
+    expect(shared.step.executed.slice(0, 6)).toEqual(["gates", "load-profile", "search", "research", "fetch-sources", "angles"]);
     expect(shared.step.executed).not.toContain("gate-topic");
     expect(shared.ai.callsFor("web_search")[0]!.input.messages[0]!.content).toBe("My own topic");
     expect(shared.ai.callsFor("research")[0]!.input.messages[0]!.content).toContain("Primary source");
@@ -210,19 +216,20 @@ describe("guided run (all gates ask)", () => {
     shared.step.script(
       { type: "gate-topic", payload: async () => ({ optionId: (await candidates()).find((c) => c.title === "Rust in the browser")!.id }) },
       { type: "gate-angle", payload: { optionId: "2" } },
+      { type: "gate-outline", payload: { optionId: "approve" } },
       approve({ channels: ["x"] }),
     );
     await runWorkflow(params);
 
-    expect(shared.step.executed).toEqual(expect.arrayContaining(["gate-topic-open", "gate-topic", "gate-angle-open", "gate-angle", "gate-draft", "publish"]));
-    expect(shared.step.waits.map((w) => [w.type, w.outcome])).toEqual([["gate-topic", "answered"], ["gate-angle", "answered"], ["approval", "answered"]]);
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["gate-topic-open", "gate-topic", "gate-angle-open", "gate-angle", "gate-outline-open", "gate-outline", "gate-draft", "publish"]));
+    expect(shared.step.waits.map((w) => [w.type, w.outcome])).toEqual([["gate-topic", "answered"], ["gate-angle", "answered"], ["gate-outline", "answered"], ["approval", "answered"]]);
     expect(shared.pushes.map((p) => p.title)).toEqual(["Draft ready for review"]); // no gate pushes: answered in-session
     const draft = await draftRow(params.runId);
     expect(draft).toMatchObject({ status: "published", angle: { headline: "Angle two" } });
     expect((await candidates()).find((c) => c.selected)?.title).toBe("Rust in the browser");
     expect(await runRow(params.runId)).toMatchObject({ state: "published", gate: null, chosenAngleIndex: 2 });
     const choices = await shared.db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, params.runId));
-    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "user"], ["angle", "user"], ["draft", "user"]]);
+    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "user"], ["angle", "user"], ["outline", "user"], ["draft", "user"]]);
     expect(shared.step.billingViolations()).toEqual([]);
   });
 
@@ -273,10 +280,12 @@ describe("the review loop (FR-7.9)", () => {
     expect(shared.ai.callsFor("article")).toHaveLength(4);
   });
 
-  it("change_angle re-drafts from another stored angle without an instructions row", async () => {
+  it("change_angle re-enters at OUTLINE from another stored angle, without an instructions row (spec §5)", async () => {
     const params = await startRun();
     shared.step.script({ type: "approval", payload: { action: "change_angle", angleIndex: 2 } }, approve());
     await runWorkflow(params);
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["outline-rev1", "gate-outline-rev1", "draft-rev1", "quality-check-rev1"]));
+    expect(shared.ai.callsFor("outline")).toHaveLength(2);
     expect(shared.ai.callsFor("article")).toHaveLength(2);
     expect(shared.ai.callsFor("article")[1]!.input.messages[0]!.content).toContain("Angle two");
     const draft = await draftRow(params.runId);
@@ -301,7 +310,7 @@ describe("the review loop (FR-7.9)", () => {
     await runWorkflow(params);
     expect(shared.step.waits[0]).toMatchObject({ type: "approval", outcome: "timeout" });
     expect(await runRow(params.runId)).toMatchObject({ state: "pending_approval", finishedAt: null });
-    expect(await draftRow(params.runId)).toMatchObject({ status: "pending_approval", stale: true, markdown: "# Article\n\nBody text." });
+    expect(await draftRow(params.runId)).toMatchObject({ status: "pending_approval", stale: true, markdown: expect.stringContaining("# Article") });
     expect(shared.sanity.docs.has(`drafts.postauto-${params.runId}`)).toBe(true);
   });
 

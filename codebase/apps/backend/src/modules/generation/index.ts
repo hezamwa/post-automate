@@ -13,9 +13,12 @@ import { buildDeriveLinkedInPrompt, LINKEDIN_MAX_CHARS } from "../../workflows/p
 import { buildDeriveXPrompt, X_MAX_CHARS } from "../../workflows/prompts/derive-x";
 import { buildDraftPrompt } from "../../workflows/prompts/draft";
 import { buildHeroImagePrompt } from "../../workflows/prompts/hero-image";
+import { buildOutlinePrompt } from "../../workflows/prompts/outline";
+import { buildQualityCheckPrompt } from "../../workflows/prompts/quality-check";
 import { buildTranslatePrompt } from "../../workflows/prompts/translate";
+import { deterministicChecks, mergeQuality } from "./quality";
 import type { TopicBrief } from "../discovery/types";
-import type { Angle, AngleProposals, Article, ArticleResult, TextDerivativeOutcome } from "./types";
+import type { Angle, AngleProposals, Article, ArticleResult, Outline, QualityCheck, TextDerivativeOutcome } from "./types";
 
 export type { Angle, AngleProposals, Article, ArticleResult, DerivedTexts, TextDerivativeOutcome } from "./types";
 
@@ -46,6 +49,11 @@ export async function proposeAngles(env: Env, db: Db, ctx: RunCtx, topic: TopicB
 }
 
 /** FR-6.3 step 2: the article, plus slug/excerpt/tags/imageAlt in one structured call (FR-8.2 mapper inputs). */
+export interface Grounding {
+  outline?: Outline | null;
+  sources?: Array<{ url: string; excerpt: string }>;
+}
+
 export async function writeArticle(
   env: Env,
   db: Db,
@@ -53,13 +61,14 @@ export async function writeArticle(
   topic: TopicBrief,
   angle: Angle,
   revision?: { currentMarkdown: string; instructions: string },
+  grounding: Grounding = {},
 ): Promise<ArticleResult> {
   const result = await runTask(env, db, {
     taskType: "article",
     userId: ctx.userId,
     runId: ctx.runId,
     // approvedExamples: from Sanity later (FR-6.2)
-    input: toChatRequest(buildDraftPrompt({ profile: ctx.profile, topic, angle, approvedExamples: [], revision })),
+    input: toChatRequest(buildDraftPrompt({ profile: ctx.profile, topic, angle, approvedExamples: [], revision, ...grounding })),
   });
   const article = result.parsed as Article;
   if (article.markdown.trim().startsWith("CANNOT_COMPLY")) throw new ComplianceRefusalError();
@@ -230,4 +239,37 @@ export async function generateHeroImage(
     size: "1536x1024",
   });
   return { imageBase64: result.imageBase64, mimeType: result.mimeType };
+}
+
+/** Spec §3 step 6: one call → the outline for the chosen angle (or another one, on request). */
+export async function writeOutline(
+  env: Env,
+  db: Db,
+  ctx: RunCtx,
+  input: { topic: TopicBrief; angle: Angle; sources: Array<{ url: string; excerpt: string }>; instructions?: string },
+): Promise<Outline> {
+  const result = await runTask(env, db, {
+    taskType: "outline",
+    userId: ctx.userId,
+    runId: ctx.runId,
+    input: toChatRequest(buildOutlinePrompt({ profile: ctx.profile, ...input })),
+  });
+  return result.parsed as Outline;
+}
+
+/** Spec §3 step 8: one judge call merged with the deterministic checks. */
+export async function checkQuality(
+  env: Env,
+  db: Db,
+  ctx: RunCtx,
+  input: { article: Article; outline: Outline | null; recentTopics: string[] },
+): Promise<QualityCheck> {
+  const result = await runTask(env, db, {
+    taskType: "quality_check",
+    userId: ctx.userId,
+    runId: ctx.runId,
+    input: toChatRequest(buildQualityCheckPrompt({ profile: ctx.profile, ...input })),
+  });
+  const { findings } = result.parsed as { findings: QualityCheck["findings"] };
+  return mergeQuality(findings, deterministicChecks(ctx.profile, input.article));
 }

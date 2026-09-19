@@ -13,8 +13,10 @@ an edit, not a rename cascade.
 | 3b | `steps/synthesize-candidates.ts` | §3 step 3b |
 | 3c | `steps/score.ts` → `gates/topic.ts` (pick · free text → `research` · auto) | §3 step 3c, §4.3 |
 | 3d | `steps/research.ts` — user-topic runs only (after `search`) | §3 step 3d |
+| 4 | `steps/fetch-sources.ts` — full content for the chosen topic only, once per run | §3 step 4 |
 | 5 | `steps/angles.ts` → `gates/angle.ts` (pick · free text = a fourth angle · auto) | §3 step 5, §4.3 |
-| 7 | `steps/draft.ts` | §3 step 7 |
+| 6 | `steps/outline.ts` → `gates/outline.ts` (approve · edit sections · free text regenerates) | §3 step 6, §4.3 |
+| 7–8 | `steps/draft.ts` → `steps/quality-check.ts` (`loops/quality.ts`: fail → one automatic revise, then proceed with the findings) | §3 steps 7–8 |
 | 9 | `steps/save-draft.ts` | §3 step 9 |
 | 11 | `steps/hero-image.ts` | §3 step 11 |
 | 12 | `steps/write-sanity-draft.ts` | §3 step 12 |

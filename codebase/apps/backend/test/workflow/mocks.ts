@@ -1,4 +1,4 @@
-import type { RunImageArgs, RunSearchArgs, RunTaskArgs } from "../../src/ai/router";
+import type { RunExtractArgs, RunImageArgs, RunSearchArgs, RunTaskArgs } from "../../src/ai/router";
 import type { TestDb } from "../db/harness";
 import type { FakeStep } from "./fake-step";
 
@@ -26,7 +26,28 @@ export const ANGLES = [
   { headline: "Angle two", thesis: "t2", whyThisCreator: "w2", outline: ["a", "b", "c"] },
 ];
 
-export function article(markdown = "# Article\n\nBody text.") {
+export const OUTLINE = {
+  sections: [
+    { heading: "Why now", keyPoints: ["the trigger"] },
+    { heading: "What changed", keyPoints: ["the mechanism", "the numbers"] },
+    { heading: "What to do", keyPoints: ["the takeaway"] },
+  ],
+};
+
+export const PASSING_FINDINGS = [
+  { check: "disclaimer", ok: true, note: "n/a" },
+  { check: "medical_language", ok: true, note: "n/a" },
+  { check: "language", ok: true, note: "English" },
+  { check: "length", ok: true, note: "fine" },
+  { check: "banned_topics", ok: true, note: "none" },
+  { check: "similarity", ok: true, note: "new" },
+  { check: "outline", ok: true, note: "followed" },
+];
+
+// ~1200 words so the deterministic length check passes for the default profile
+export const LONG_BODY = "# Article\n\n" + Array.from({ length: 120 }, (_, i) => `Paragraph ${i} carries ten words of body text for the length check.`).join("\n\n");
+
+export function article(markdown = LONG_BODY) {
   return { title: "Article title", slug: "article-title", excerpt: "An excerpt.", tags: ["ai"], imageAlt: "alt text", markdown };
 }
 
@@ -56,6 +77,12 @@ export class FakeAi {
     return { imageBase64: "AAAA", mimeType: "image/png", provider: "openai", model: "gpt-image-1", costUsd: 0.04 };
   }
 
+  extract(args: RunExtractArgs) {
+    this.calls.push({ taskType: "extract", input: { messages: args.urls.map((u) => ({ role: "user" as const, content: u })) } });
+    const pages = (this.overrides.get("extract")?.(args as unknown as RunTaskArgs) as unknown[] | undefined) ?? args.urls.map((url) => ({ url, title: `Page ${url}`, content: `Full content of ${url}` }));
+    return { pages, usage: { searches: 1 }, provider: "tavily", model: "tavily-search", costUsd: 0.008 };
+  }
+
   search(args: RunSearchArgs) {
     this.calls.push({ taskType: "web_search", input: { messages: [{ role: "user", content: args.query }] } });
     const results = (this.overrides.get("web_search")?.(args as unknown as RunTaskArgs) as unknown[] | undefined) ?? [];
@@ -83,6 +110,10 @@ export class FakeAi {
         return "short post";
       case "translate":
         return { title: "عنوان", excerpt: "ملخص", imageAlt: "وصف", markdown: "# مرحبا" };
+      case "outline":
+        return OUTLINE;
+      case "quality_check":
+        return { findings: PASSING_FINDINGS };
       default:
         throw new Error(`FakeAi: no default response for task '${taskType}'`);
     }
@@ -104,6 +135,11 @@ export function routerMock(original: typeof import("../../src/ai/router"), share
     runSearch: async (_env: unknown, _db: unknown, args: RunSearchArgs) => {
       shared.step.noteProviderCall("web_search");
       return shared.ai.search(args);
+    },
+    runExtract: async (_env: unknown, _db: unknown, args: RunExtractArgs) => {
+      if (!(await original.hasRouteFor(shared.db as never, "web_search", args.userId))) throw new original.NoRouteError("web_search");
+      shared.step.noteProviderCall("web_search");
+      return shared.ai.extract(args);
     },
   };
 }

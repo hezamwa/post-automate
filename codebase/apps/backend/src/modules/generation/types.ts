@@ -67,3 +67,21 @@ export const heroOutcomeSchema = z.object({
   reason: z.string().optional(),
 });
 export type HeroOutcome = z.infer<typeof heroOutcomeSchema>;
+
+/** Spec §3 step 6: section headings with 1–2 key points each, for the chosen angle. */
+export const outlineSchema = z.object({
+  sections: z.array(z.object({ heading: z.string().min(1), keyPoints: z.array(z.string()).max(4) })).min(2).max(10),
+});
+export type Outline = z.infer<typeof outlineSchema>;
+
+export const QUALITY_CHECKS = ["disclaimer", "medical_language", "language", "length", "banned_topics", "similarity", "outline"] as const;
+
+/** Spec §3 step 8: the quality-check verdict shown on the review screen. */
+export const qualityFindingSchema = z.object({ check: z.enum(QUALITY_CHECKS), ok: z.boolean(), note: z.string() });
+export const qualityCheckSchema = z.object({
+  passed: z.boolean(),
+  autoRevised: z.boolean(),
+  findings: z.array(qualityFindingSchema),
+});
+export type QualityCheck = z.infer<typeof qualityCheckSchema>;
+export type QualityFinding = z.infer<typeof qualityFindingSchema>;

@@ -4,7 +4,7 @@ import { and, eq, gte } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
 import { GateError } from "../../ai/gates";
 import { toChatRequest } from "../../ai/prompts/spec";
-import { hasRouteFor, runSearch, runTask } from "../../ai/router";
+import { hasRouteFor, runExtract, runSearch, runTask } from "../../ai/router";
 import { schema, type Db } from "../../db/client";
 import type { Env } from "../../shared/env";
 import { buildResearchPrompt } from "../../workflows/prompts/research";
@@ -210,4 +210,28 @@ export function candidateFromRow(row: typeof schema.topicCandidates.$inferSelect
 export async function selectCandidate(db: Db, runId: string, candidateId: string): Promise<void> {
   await db.update(schema.topicCandidates).set({ selected: false }).where(eq(schema.topicCandidates.runId, runId));
   await db.update(schema.topicCandidates).set({ selected: true, rejectionReason: null }).where(eq(schema.topicCandidates.id, candidateId));
+}
+
+export const MAX_SOURCES = 6;
+export const MAX_SOURCE_CHARS = 20_000;
+
+/**
+ * Spec §3 step 4: full content for the chosen topic's pages — ONE extract call, persisted
+ * to `sources` so a retried or revised draft never refetches. Absent route or failure is
+ * not fatal: the draft grounds on the brief's summary instead (the caller records why).
+ */
+export async function fetchSources(env: Env, db: Db, ctx: { userId: string; runId: string }, urls: string[]): Promise<{ fetched: number }> {
+  const unique = [...new Set(urls.filter((u) => /^https?:\/\//.test(u)))].slice(0, MAX_SOURCES);
+  if (unique.length === 0) return { fetched: 0 };
+  const { pages } = await runExtract(env, db, { userId: ctx.userId, runId: ctx.runId, urls: unique });
+  for (const page of pages) {
+    await db
+      .insert(schema.sources)
+      .values({ runId: ctx.runId, url: page.url, title: page.title ?? null, content: page.content.slice(0, MAX_SOURCE_CHARS) })
+      .onConflictDoUpdate({
+        target: [schema.sources.runId, schema.sources.url],
+        set: { title: page.title ?? null, content: page.content.slice(0, MAX_SOURCE_CHARS), fetchedAt: new Date() },
+      });
+  }
+  return { fetched: pages.length };
 }

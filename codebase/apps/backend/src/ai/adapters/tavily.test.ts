@@ -112,3 +112,16 @@ describe("tavily healthCheck", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("tavily extract (article-workflow §3 step 4)", () => {
+  it("posts the urls, keeps pages with content, and bills one search per started block of five", async () => {
+    const calls = stub(() =>
+      new Response(JSON.stringify({ results: [{ url: "https://a.example", raw_content: "full a" }, { url: "https://b.example", raw_content: "" }], failed_results: [{ url: "https://c.example", error: "403" }] }), { status: 200 }),
+    );
+    const out = await createTavilyAdapter(env).extract!({ urls: ["https://a.example", "https://b.example", "https://c.example"] });
+    expect(calls[0]).toEqual({ urls: ["https://a.example", "https://b.example", "https://c.example"] });
+    expect(out.pages).toEqual([{ url: "https://a.example", content: "full a" }]);
+    expect(out.usage).toEqual({ searches: 1 });
+    expect((await createTavilyAdapter(env).extract!({ urls: Array.from({ length: 7 }, (_, i) => `https://${i}.example`) })).usage).toEqual({ searches: 2 });
+  });
+});

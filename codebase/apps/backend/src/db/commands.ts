@@ -300,6 +300,7 @@ export async function createDraft(
     topicId: string;
     angle: unknown;
     markdown: string; // editing source-of-truth until publish (DR-9.11)
+    qualityCheck?: unknown; // spec §3 step 8 verdict
   },
 ): Promise<{ id: string }> {
   const [row] = await db
@@ -310,6 +311,7 @@ export async function createDraft(
       topicId: args.topicId,
       angle: args.angle,
       markdown: args.markdown,
+      qualityCheck: args.qualityCheck ?? null,
       status: "pending_approval",
     })
     .returning({ id: schema.drafts.id });
@@ -387,4 +389,14 @@ export async function recordGateChoice(
     freeText,
     source: args.source,
   });
+}
+
+/** Spec §3 step 6: the outline the draft is written from — replaced on edit or regeneration. */
+export async function setRunOutline(db: Db, runId: string, outline: unknown): Promise<void> {
+  await db.update(schema.pipelineRuns).set({ outline }).where(eq(schema.pipelineRuns.id, runId));
+}
+
+/** Spec §3 step 8: the latest quality-check result, shown on the review screen. */
+export async function setDraftQuality(db: Db, draftId: string, qualityCheck: unknown): Promise<void> {
+  await db.update(schema.drafts).set({ qualityCheck }).where(eq(schema.drafts.id, draftId));
 }

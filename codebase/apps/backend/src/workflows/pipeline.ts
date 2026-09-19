@@ -4,11 +4,13 @@ import { createRunContext, pinProfile, type PipelineParams } from "./context";
 import { chooseAngle } from "./gates/angle";
 import { draftGate, waitForDraftDecision } from "./gates/draft";
 import { applyGate, RunAbandonedError } from "./gates/gate";
+import { chooseOutline } from "./gates/outline";
 import { chooseTopic } from "./gates/topic";
 import { deriveAll } from "./loops/derivatives";
+import { draftWithQualityCheck } from "./loops/quality";
 import { reviewable, reviewLoop } from "./loops/revise";
 import { angles } from "./steps/angles";
-import { draft } from "./steps/draft";
+import { fetchSourcesStep } from "./steps/fetch-sources";
 import { entryGates } from "./steps/gates";
 import { loadProfile } from "./steps/load-profile";
 import { publish } from "./steps/publish";
@@ -60,12 +62,16 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
       topic = await chooseTopic(step, ctx);
     }
 
-    // 5. angles → angle gate
-    const { angle, proposals } = await chooseAngle(step, ctx, await runStep(step, ctx, angles, { topic }));
+    // 4. fetch-sources — full content for the chosen topic only
+    await runStep(step, ctx, fetchSourcesStep, { urls: topic.sourceUrls });
 
-    // 7. draft → 9. save-draft
-    const drafted = await runStep(step, ctx, draft, { topic, angle });
-    const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown });
+    // 5. angles → angle gate; 6. outline → outline gate
+    const { angle, proposals } = await chooseAngle(step, ctx, await runStep(step, ctx, angles, { topic }));
+    const outline = await chooseOutline(step, ctx, { topic, angle });
+
+    // 7–8. draft → quality-check (fail → one automatic revise) → 9. save-draft
+    const { drafted, quality } = await draftWithQualityCheck(step, ctx, { topic, angle, outline, autoRevise: true });
+    const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown, qualityCheck: quality });
 
     // 11–13. hero image, Sanity draft, notify → draft gate
     const built = await reviewable(step, ctx, {
@@ -79,7 +85,7 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     const review = await reviewLoop(
       step,
       ctx,
-      { draftId, topic, angle, proposals, article: drafted.article, reviewable: built },
+      { draftId, topic, angle, outline, proposals, article: drafted.article, reviewable: built },
       await waitForDraftDecision(step, 0),
     );
 
