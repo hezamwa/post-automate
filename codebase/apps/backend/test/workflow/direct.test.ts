@@ -31,6 +31,7 @@ describe("approveDirect", () => {
     });
     expect(status).toBe("published");
     expect(await draftRow(params.runId)).toMatchObject({ status: "published", markdown: null, channels: ["x", "translation"] });
+    expect(await shared.db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, params.runId))).toMatchObject([{ gate: "derivatives", source: "user" }]);
     expect((await runRow(params.runId))?.state).toBe("published");
     const rows = await derivativeRows(draft.id);
     expect(rows.map((d) => [d.kind, d.outcome]).sort()).toEqual([["hero_image", "produced"], ["linkedin", "declined"], ["translation", "produced"], ["x", "produced"]]);

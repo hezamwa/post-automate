@@ -16,13 +16,14 @@ export const translate = defineStep({
   input: z.object({
     draftId: z.string().uuid(),
     revisionNo: z.number().int().min(0),
+    force: z.boolean().optional(),
     /** Title/excerpt/alt from the article when known; the prompt writes them otherwise. */
     source: z.object({ title: z.string().optional(), excerpt: z.string().optional(), imageAlt: z.string().optional() }).default({}),
   }),
   output: z.object({ outcome: z.enum(["absent", "declined", "produced", "failed"]), reason: z.string().optional() }),
   bills: "translate",
   retries: RETRY.ai,
-  run: async (ctx, { draftId, revisionNo, source }) => {
+  run: async (ctx, { draftId, revisionNo, source, force }) => {
     const profile = profileOf(ctx);
     const db = createDb(ctx.env);
     const draft = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, draftId) });
@@ -32,6 +33,12 @@ export const translate = defineStep({
     if (decision === "declined") {
       await recordDerivatives(db, draftId, revisionNo, [{ kind: "translation", outcome: "declined", reason: DECLINED_REASON }]);
       return { outcome: "declined" };
+    }
+    if (!force) {
+      const existing = await db.query.draftDerivatives.findFirst({
+        where: (d, { and, eq }) => and(eq(d.draftId, draftId), eq(d.kind, "translation"), eq(d.revisionNo, revisionNo), eq(d.outcome, "produced")),
+      });
+      if (existing) return { outcome: "produced" }; // re-approval after a hold without edits
     }
     const result = await translateArticle(ctx.env, db, moduleCtx(ctx), { ...source, markdown: draft.markdown }, profile.translation.targetLanguage!);
     await recordDerivatives(db, draftId, revisionNo, [result]);

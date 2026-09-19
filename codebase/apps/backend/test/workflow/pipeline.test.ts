@@ -15,8 +15,8 @@ import { article } from "./mocks";
 beforeEach(resetShared);
 
 const approve = (extra: Record<string, unknown> = {}) => ({ type: "approval", payload: { action: "approve", publishMode: "now", ...extra } });
-const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "gate-topic", "fetch-sources", "angles", "gate-angle", "outline", "gate-outline", "draft", "quality-check", "save-draft", "hero-image", "write-sanity-draft", "notify"];
-const AFTER_APPROVE = ["gate-draft", "derive-x", "derive-linkedin", "translate", "publish"];
+const PRE_REVIEW = ["gates", "load-profile", "search", "synthesize-candidates", "score", "gate-topic", "fetch-sources", "angles", "gate-angle", "outline", "gate-outline", "draft", "quality-check", "save-draft", "image-concepts", "gate-image", "hero-image", "write-sanity-draft", "notify"];
+const AFTER_APPROVE = ["gate-draft", "gate-derivatives", "derive-x", "derive-linkedin", "translate", "gate-publish", "publish"];
 
 describe("scheduled/manual run", () => {
   it("search → synthesize → score → angles → draft → save → hero → Sanity → notify → approve → derivatives → published", async () => {
@@ -41,7 +41,7 @@ describe("scheduled/manual run", () => {
     expect(shared.pushes.map((p) => p.title)).toEqual(["Draft ready for review"]);
     // auto gates still log their choices (spec §4.3 preference signal)
     const choices = await shared.db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, params.runId));
-    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "auto"], ["angle", "auto"], ["outline", "auto"], ["draft", "user"]]);
+    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "auto"], ["angle", "auto"], ["outline", "auto"], ["image", "auto"], ["draft", "user"], ["derivatives", "user"], ["publish", "auto"]]);
     expect(shared.step.billingViolations()).toEqual([]);
   });
 
@@ -217,19 +217,23 @@ describe("guided run (all gates ask)", () => {
       { type: "gate-topic", payload: async () => ({ optionId: (await candidates()).find((c) => c.title === "Rust in the browser")!.id }) },
       { type: "gate-angle", payload: { optionId: "2" } },
       { type: "gate-outline", payload: { optionId: "approve" } },
+      { type: "gate-image", payload: { optionId: "none" } },
       approve({ channels: ["x"] }),
+      { type: "gate-publish", payload: { optionId: "now" } },
     );
     await runWorkflow(params);
 
-    expect(shared.step.executed).toEqual(expect.arrayContaining(["gate-topic-open", "gate-topic", "gate-angle-open", "gate-angle", "gate-outline-open", "gate-outline", "gate-draft", "publish"]));
-    expect(shared.step.waits.map((w) => [w.type, w.outcome])).toEqual([["gate-topic", "answered"], ["gate-angle", "answered"], ["gate-outline", "answered"], ["approval", "answered"]]);
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["gate-topic-open", "gate-topic", "gate-angle-open", "gate-angle", "gate-outline-open", "gate-outline", "gate-image-open", "gate-image", "gate-draft", "gate-derivatives", "gate-publish-open", "gate-publish", "publish"]));
+    expect(shared.step.waits.map((w) => [w.type, w.outcome])).toEqual([["gate-topic", "answered"], ["gate-angle", "answered"], ["gate-outline", "answered"], ["gate-image", "answered"], ["approval", "answered"], ["gate-publish", "answered"]]);
+    expect(shared.ai.callsFor("image")).toHaveLength(0); // "no hero image"
     expect(shared.pushes.map((p) => p.title)).toEqual(["Draft ready for review"]); // no gate pushes: answered in-session
     const draft = await draftRow(params.runId);
     expect(draft).toMatchObject({ status: "published", angle: { headline: "Angle two" } });
     expect((await candidates()).find((c) => c.selected)?.title).toBe("Rust in the browser");
     expect(await runRow(params.runId)).toMatchObject({ state: "published", gate: null, chosenAngleIndex: 2 });
     const choices = await shared.db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, params.runId));
-    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "user"], ["angle", "user"], ["outline", "user"], ["draft", "user"]]);
+    expect(choices.map((c) => [c.gate, c.source])).toEqual([["topic", "user"], ["angle", "user"], ["outline", "user"], ["image", "user"], ["draft", "user"], ["derivatives", "user"], ["publish", "user"]]);
+    expect((await derivativeRows(draft!.id)).find((d) => d.kind === "hero_image")).toMatchObject({ outcome: "declined" });
     expect(shared.step.billingViolations()).toEqual([]);
   });
 
@@ -366,5 +370,51 @@ describe("retry boundaries", () => {
     const draft = await draftRow(params.runId);
     expect((await derivativeRows(draft!.id)).find((d) => d.kind === "translation")).toMatchObject({ outcome: "failed", reason: "translator exploded" });
     expect(draft?.status).toBe("published"); // the article publishes alone
+  });
+});
+
+describe("the publish gate (spec §4.3, §5)", () => {
+  const askPublish = () => techProfile({ gates: { publish: "ask" } });
+
+  it("hold returns the draft to the queue; a later approve without edits reuses the derivatives and publishes", async () => {
+    const params = await startRun({ profile: askPublish() });
+    shared.step.script(approve(), { type: "gate-publish", payload: { optionId: "hold" } }, approve(), { type: "gate-publish", payload: { optionId: "now" } });
+    await runWorkflow(params);
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["gate-publish", "record-hold1", "gate-draft-a1", "gate-derivatives-a1", "derive-x-a1", "gate-publish-a1", "publish-a1"]));
+    expect(shared.ai.callsFor("shorten_x")).toHaveLength(1); // reused, not re-billed
+    expect((await runRow(params.runId))?.state).toBe("published");
+    expect((await draftRow(params.runId))?.status).toBe("published");
+    expect(shared.step.billingViolations()).toEqual([]);
+  });
+
+  it("hold, then a revise, then approve: the revision still counts toward the cap and the derivatives are regenerated", async () => {
+    const params = await startRun({ profile: askPublish() });
+    shared.step.script(
+      approve(),
+      { type: "gate-publish", payload: { optionId: "hold" } },
+      { type: "approval", payload: { action: "revise", instructions: "punchier" } },
+      approve(),
+      { type: "gate-publish", payload: { optionId: "next_slot" } },
+    );
+    await runWorkflow(params);
+    expect(shared.step.executed).toEqual(expect.arrayContaining(["record-hold1", "draft-rev1", "quality-check-rev1", "notify-rev1", "derive-x-a1", "publish-a1"]));
+    expect(shared.ai.callsFor("shorten_x")).toHaveLength(2); // revision 1 is a new text
+    expect((await draftRow(params.runId))?.status).toBe("scheduled");
+  });
+
+  it("edits at re-approval regenerate the derivatives from the edited text", async () => {
+    const params = await startRun({ profile: askPublish() });
+    shared.step.script(approve(), { type: "gate-publish", payload: { optionId: "hold" } }, approve({ editedMarkdown: "# Edited after hold" }), { type: "gate-publish", payload: { optionId: "now" } });
+    await runWorkflow(params);
+    expect(shared.ai.callsFor("shorten_x")).toHaveLength(2);
+    expect(shared.ai.callsFor("shorten_x")[1]!.input.messages[0]!.content).toBe("# Edited after hold");
+  });
+
+  it("auto: the approval's next_slot schedules without asking", async () => {
+    const params = await startRun();
+    shared.step.script(approve({ publishMode: "next_slot" }));
+    await runWorkflow(params);
+    expect(shared.step.waits.map((w) => w.type)).toEqual(["approval"]);
+    expect((await draftRow(params.runId))?.status).toBe("scheduled");
   });
 });

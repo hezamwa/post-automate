@@ -34,6 +34,12 @@ export const OUTLINE = {
   ],
 };
 
+export const CONCEPTS = [
+  { title: "Abstract network", description: "Glowing nodes on a dark field", why: "agents as a mesh" },
+  { title: "Workshop bench", description: "Tools laid out on a bench, top-down", why: "craft" },
+  { title: "Lighthouse", description: "A lighthouse beam over data waves", why: "guidance" },
+];
+
 export const PASSING_FINDINGS = [
   { check: "disclaimer", ok: true, note: "n/a" },
   { check: "medical_language", ok: true, note: "n/a" },
@@ -114,6 +120,8 @@ export class FakeAi {
         return OUTLINE;
       case "quality_check":
         return { findings: PASSING_FINDINGS };
+      case "image_concepts":
+        return { concepts: CONCEPTS };
       default:
         throw new Error(`FakeAi: no default response for task '${taskType}'`);
     }

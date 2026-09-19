@@ -7,7 +7,10 @@ import { getProfileVersion } from "../modules/profiles";
 import { deleteDraft } from "../modules/publishing";
 import type { Env } from "../shared/env";
 import { createRunContext, pinProfile, type RunContext } from "./context";
+import { derivativesGate } from "./gates/derivatives";
 import { draftGate, type ApprovalEventPayload } from "./gates/draft";
+import { profileOf } from "./context";
+import { recordGateChoice } from "../db/commands";
 import { deriveAll } from "./loops/derivatives";
 import { publish } from "./steps/publish";
 import { inlineStep } from "./steps/step";
@@ -45,8 +48,14 @@ export async function approveDirect(
 ): Promise<"published" | "scheduled"> {
   const ctx = await contextFor(env, db, args.draft);
   await draftGate.apply(ctx, { ...args.decision, action: "approve" });
+  // the derivatives gate, from the approve payload (spec §4.1): ask → the ticked set, auto → the profile
+  const auto = profileOf(ctx).gates.derivatives === "auto";
+  const selection = auto || !args.decision.channels ? await derivativesGate.recommended(ctx) : { selected: args.decision.channels };
+  await derivativesGate.apply(ctx, selection);
+  await recordGateChoice(db, { runId: ctx.runId, userId: ctx.userId, gate: "derivatives", optionsShown: await derivativesGate.options(ctx), choice: selection, source: auto ? "auto" : "user" });
+  const edited = args.decision.editedMarkdown != null && args.decision.editedMarkdown !== args.draft.markdown;
   const headline = (args.draft.angle as { headline?: string } | null)?.headline;
-  await deriveAll(inlineStep(), ctx, { draftId: args.draft.id, revisionNo: ctx.revision, source: { title: headline } });
+  await deriveAll(inlineStep(), ctx, { draftId: args.draft.id, revisionNo: ctx.revision, source: { title: headline }, force: edited });
   const { status } = await publish.run(ctx, { draftId: args.draft.id, publishMode: args.decision.publishMode ?? "now" });
   return status;
 }

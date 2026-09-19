@@ -2,13 +2,16 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import type { Env } from "../shared/env";
 import { createRunContext, pinProfile, type PipelineParams } from "./context";
 import { chooseAngle } from "./gates/angle";
+import { resolveDerivatives } from "./gates/derivatives";
 import { draftGate, waitForDraftDecision } from "./gates/draft";
 import { applyGate, RunAbandonedError } from "./gates/gate";
+import { chooseImage } from "./gates/image";
 import { chooseOutline } from "./gates/outline";
+import { resolvePublish } from "./gates/publish";
 import { chooseTopic } from "./gates/topic";
 import { deriveAll } from "./loops/derivatives";
 import { draftWithQualityCheck } from "./loops/quality";
-import { reviewable, reviewLoop } from "./loops/revise";
+import { reviewable, reviewLoop, type ReviewState } from "./loops/revise";
 import { angles } from "./steps/angles";
 import { fetchSourcesStep } from "./steps/fetch-sources";
 import { entryGates } from "./steps/gates";
@@ -73,42 +76,44 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     const { drafted, quality } = await draftWithQualityCheck(step, ctx, { topic, angle, outline, autoRevise: true });
     const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown, qualityCheck: quality });
 
-    // 11–13. hero image, Sanity draft, notify → draft gate
-    const built = await reviewable(step, ctx, {
+    // 10. image-concepts → image gate; 11–13. hero image, Sanity draft, notify → draft gate
+    const concept = await chooseImage(step, ctx, { title: drafted.article.title, excerpt: drafted.article.excerpt });
+    const state: ReviewState = {
       draftId,
-      revisionNo: 0,
+      topic,
+      angle,
+      outline,
+      proposals,
       article: drafted.article,
-      provider: drafted.provider,
-      model: drafted.model,
-      sourceUrls: topic.sourceUrls,
-    });
-    const review = await reviewLoop(
-      step,
-      ctx,
-      { draftId, topic, angle, outline, proposals, article: drafted.article, reviewable: built },
-      await waitForDraftDecision(step, 0),
-    );
+      concept,
+      reviewable: await reviewable(step, ctx, { draftId, revisionNo: 0, article: drafted.article, provider: drafted.provider, model: drafted.model, sourceUrls: topic.sourceUrls, concept }),
+      waits: 0,
+    };
+    let review = await reviewLoop(step, ctx, state, await waitForDraftDecision(step, state.waits++));
 
-    // terminal decision
-    switch (review.decision.action) {
-      case "approve":
-        // edits, blogType, ticked channels → 14–16. derivatives from the final markdown → 17. publish
-        await applyGate(step, ctx, draftGate, review.decision);
-        await deriveAll(step, ctx, { draftId, revisionNo: ctx.revision, source: review.article });
-        await runStep(step, ctx, publish, { draftId, publishMode: review.decision.publishMode ?? "now" });
+    // approve → derivatives gate (on the approve payload) → 14–16. derivatives → publish gate → 17. publish
+    // hold sends the draft back to the queue and the draft gate; every cycle gets its own step names.
+    for (let approval = 0; review.decision.action === "approve"; approval++) {
+      const tag = approval ? `a${approval}` : undefined;
+      const decision = await applyGate(step, ctx, draftGate, review.decision, undefined, tag);
+      const edited = decision.editedMarkdown != null && decision.editedMarkdown !== review.article.markdown;
+      if (edited) review.article = { ...review.article, markdown: decision.editedMarkdown! };
+      await resolveDerivatives(step, ctx, decision, tag);
+      await deriveAll(step, ctx, { draftId, revisionNo: ctx.revision, source: review.article, force: edited }, tag);
+      const verdict = await resolvePublish(step, ctx, tag);
+      if (verdict !== "hold") {
+        await runStep(step, ctx, publish, { draftId, publishMode: verdict }, tag);
         return;
-      case "reject":
-        await runStep(step, ctx, record, {
-          outcome: "rejected",
-          draftId,
-          sanityDocId: review.reviewable.sanityDocId,
-          category: review.decision.rejectionCategory ?? "other",
-        }, "reject");
-        return;
-      default:
-        // the instance's wait ran out: the draft is flagged stale, never expired (spec §5.1)
-        await runStep(step, ctx, record, { outcome: "stale", draftId }, "stale");
-        return;
+      }
+      await runStep(step, ctx, record, { outcome: "held" }, `hold${approval + 1}`);
+      review = await reviewLoop(step, ctx, { ...state, article: review.article, angle: review.angle, reviewable: review.reviewable }, await waitForDraftDecision(step, state.waits++));
+    }
+
+    // reject, or the instance's wait ran out (stale — never expired, spec §5.1)
+    if (review.decision.action === "reject") {
+      await runStep(step, ctx, record, { outcome: "rejected", draftId, sanityDocId: review.reviewable.sanityDocId, category: review.decision.rejectionCategory ?? "other" }, "reject");
+    } else {
+      await runStep(step, ctx, record, { outcome: "stale", draftId }, "stale");
     }
   } catch (e) {
     if (e instanceof RunAbandonedError) return; // recorded by the gate; a decision, not a failure

@@ -85,3 +85,8 @@ export const qualityCheckSchema = z.object({
 });
 export type QualityCheck = z.infer<typeof qualityCheckSchema>;
 export type QualityFinding = z.infer<typeof qualityFindingSchema>;
+
+/** Spec §3 step 10: hero-image concepts as short text, before any image is generated. */
+export const imageConceptSchema = z.object({ id: z.string().min(1), title: z.string().min(1), description: z.string().min(1), why: z.string() });
+export const imageConceptsSchema = z.object({ concepts: z.array(imageConceptSchema).min(1).max(3) });
+export type ImageConcept = z.infer<typeof imageConceptSchema>;

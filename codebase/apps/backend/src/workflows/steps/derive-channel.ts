@@ -24,6 +24,8 @@ export const channelInputSchema = z.object({
   revisionNo: z.number().int().min(0),
   /** Second pass only: the first answer, which ran over the limit. */
   tooLong: z.string().optional(),
+  /** Re-approval after a hold with edited text: regenerate even though a produced row exists. */
+  force: z.boolean().optional(),
 });
 
 export const channelOutputSchema = z.object({
@@ -55,6 +57,13 @@ export function channelStep(kind: ChannelKind): StepDef<ChannelInput, ChannelOut
 
       const decision = kindDecision(profileOf(ctx), draft.channels as string[] | null, kind);
       if (decision === "absent") return { outcome: "absent" };
+      // Re-approval after a hold without edits: the produced text still matches the draft — reuse it.
+      if (decision === "run" && !input.force && !input.tooLong) {
+        const existing = await db.query.draftDerivatives.findFirst({
+          where: (d, { and, eq }) => and(eq(d.draftId, input.draftId), eq(d.kind, kind), eq(d.revisionNo, input.revisionNo), eq(d.outcome, "produced")),
+        });
+        if (existing?.content) return { outcome: "produced", length: existing.content.length };
+      }
       if (decision === "declined") {
         await record({ outcome: "declined", reason: DECLINED_REASON });
         return { outcome: "declined" };

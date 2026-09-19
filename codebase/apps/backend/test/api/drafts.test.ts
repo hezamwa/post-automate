@@ -101,3 +101,26 @@ describe("GET /drafts/:id", () => {
     expect(res.json.draft).toMatchObject({ stale: true, channels: ["x"] });
   });
 });
+
+describe("POST /drafts/:id/hold and the gate info on GET /drafts/:id (spec §4.1, §4.3)", () => {
+  it("hold answers the publish gate when the run is waiting there, 409 otherwise", async () => {
+    const { env, pipeline } = apiEnv();
+    const { params, draftId, token } = await pending();
+    await pipeline.binding.create({ id: params.runId });
+    await shared.db.update(schema.pipelineRuns).set({ workflowInstanceId: params.runId, gate: "publish" }).where(eq(schema.pipelineRuns.id, params.runId));
+    expect((await call(env, `/drafts/${draftId}/hold`, { method: "POST", token })).status).toBe(200);
+    expect(pipeline.instances.get(params.runId)?.events).toEqual([{ type: "gate-publish", payload: { optionId: "hold" } }]);
+    await shared.db.update(schema.pipelineRuns).set({ gate: null }).where(eq(schema.pipelineRuns.id, params.runId));
+    expect((await call(env, `/drafts/${draftId}/hold`, { method: "POST", token })).status).toBe(409);
+  });
+
+  it("the detail carries the derivatives gate (setting, options, pre-ticked) and the publish setting", async () => {
+    const { env } = apiEnv();
+    const { draftId, token } = await pending();
+    const res = await call(env, `/drafts/${draftId}`, { token });
+    expect(res.json.gates).toEqual({
+      derivatives: { setting: "ask", options: [{ id: "x", title: "X post", summary: "", why: "" }, { id: "linkedin", title: "LinkedIn post", summary: "", why: "" }], preselected: ["x", "linkedin"] },
+      publish: { setting: "auto" },
+    });
+  });
+});

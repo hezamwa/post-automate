@@ -13,12 +13,13 @@ import { buildDeriveLinkedInPrompt, LINKEDIN_MAX_CHARS } from "../../workflows/p
 import { buildDeriveXPrompt, X_MAX_CHARS } from "../../workflows/prompts/derive-x";
 import { buildDraftPrompt } from "../../workflows/prompts/draft";
 import { buildHeroImagePrompt } from "../../workflows/prompts/hero-image";
+import { buildImageConceptsPrompt } from "../../workflows/prompts/image-concepts";
 import { buildOutlinePrompt } from "../../workflows/prompts/outline";
 import { buildQualityCheckPrompt } from "../../workflows/prompts/quality-check";
 import { buildTranslatePrompt } from "../../workflows/prompts/translate";
 import { deterministicChecks, mergeQuality } from "./quality";
 import type { TopicBrief } from "../discovery/types";
-import type { Angle, AngleProposals, Article, ArticleResult, Outline, QualityCheck, TextDerivativeOutcome } from "./types";
+import type { Angle, AngleProposals, Article, ArticleResult, ImageConcept, Outline, QualityCheck, TextDerivativeOutcome } from "./types";
 
 export type { Angle, AngleProposals, Article, ArticleResult, DerivedTexts, TextDerivativeOutcome } from "./types";
 
@@ -229,13 +230,13 @@ export async function generateHeroImage(
   env: Env,
   db: Db,
   ctx: RunCtx,
-  headline: string,
+  input: { headline: string; concept?: string | null },
 ): Promise<{ imageBase64: string; mimeType: string }> {
   const result = await runImageTask(env, db, {
     taskType: "image",
     userId: ctx.userId,
     runId: ctx.runId,
-    prompt: buildHeroImagePrompt({ headline, profile: ctx.profile }),
+    prompt: buildHeroImagePrompt({ ...input, profile: ctx.profile }),
     size: "1536x1024",
   });
   return { imageBase64: result.imageBase64, mimeType: result.mimeType };
@@ -272,4 +273,16 @@ export async function checkQuality(
   });
   const { findings } = result.parsed as { findings: QualityCheck["findings"] };
   return mergeQuality(findings, deterministicChecks(ctx.profile, input.article));
+}
+
+/** Spec §3 step 10: one call → 2–3 hero concepts as text; ids are positional so a gate answer can name one. */
+export async function proposeImageConcepts(env: Env, db: Db, ctx: RunCtx, input: { title: string; excerpt: string }): Promise<ImageConcept[]> {
+  const result = await runTask(env, db, {
+    taskType: "image_concepts",
+    userId: ctx.userId,
+    runId: ctx.runId,
+    input: toChatRequest(buildImageConceptsPrompt({ profile: ctx.profile, ...input })),
+  });
+  const { concepts } = result.parsed as { concepts: Array<Omit<ImageConcept, "id">> };
+  return concepts.slice(0, 3).map((c, i) => ({ id: `c${i + 1}`, ...c }));
 }

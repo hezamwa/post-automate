@@ -69,7 +69,7 @@ describe("POST /runs/:id/gates/:gate", () => {
     expect(wrong.json.error).toMatch(/waiting on the topic gate/);
     await setRunGate(shared.db, params.runId, null);
     expect((await call(env, `/runs/${params.runId}/gates/topic`, { method: "POST", token, body: { freeText: "later" } })).status).toBe(409);
-    expect((await call(env, `/runs/${params.runId}/gates/publish`, { method: "POST", token, body: {} })).status).toBe(404);
+    expect((await call(env, `/runs/${params.runId}/gates/derivatives`, { method: "POST", token, body: {} })).status).toBe(404); // answered on the approve payload, never here
   });
 
   it("409 when the instance is gone (abandoned)", async () => {

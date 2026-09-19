@@ -18,10 +18,13 @@ an edit, not a rename cascade.
 | 6 | `steps/outline.ts` → `gates/outline.ts` (approve · edit sections · free text regenerates) | §3 step 6, §4.3 |
 | 7–8 | `steps/draft.ts` → `steps/quality-check.ts` (`loops/quality.ts`: fail → one automatic revise, then proceed with the findings) | §3 steps 7–8 |
 | 9 | `steps/save-draft.ts` | §3 step 9 |
-| 11 | `steps/hero-image.ts` | §3 step 11 |
+| 10 | `steps/image-concepts.ts` → `gates/image.ts` (concept · "no hero image" · custom) | §3 step 10, §4.3 |
+| 11 | `steps/hero-image.ts` — the chosen concept; declined when none | §3 step 11 |
 | 12 | `steps/write-sanity-draft.ts` | §3 step 12 |
 | 13 | `steps/notify.ts` → `gates/draft.ts` + `loops/revise.ts` | §3 step 13, §5 |
-| 14–16 | `steps/derive-x.ts`, `steps/derive-linkedin.ts`, `steps/translate.ts` — after approval, from the final markdown, only the ticked channels (`loops/derivatives.ts`) | §3 steps 14–16, §4.1 |
+| — | `gates/derivatives.ts` — on the approve payload, no pause; ticked kinds → drafts.channels | §4.1 |
+| 14–16 | `steps/derive-x.ts`, `steps/derive-linkedin.ts`, `steps/translate.ts` — after approval, from the final markdown, only the ticked channels (`loops/derivatives.ts`; reused on re-approval unless edited) | §3 steps 14–16 |
+| — | `gates/publish.ts` — now · next slot · hold (back to the draft gate), derivative texts shown, edits ride along | §4.3, §5 |
 | 17 | `steps/publish.ts` | §3 step 17, §6 |
 | 18 | `steps/record.ts` | §3 step 18 |
 

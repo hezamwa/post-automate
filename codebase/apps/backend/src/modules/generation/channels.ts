@@ -24,4 +24,4 @@ export function kindDecision(profile: Profile, selection: readonly string[] | nu
   return approvedKinds(profile, selection).includes(kind) ? "run" : "declined";
 }
 
-export const DECLINED_REASON = "Not selected at approval — the creator left this channel unticked (spec §4.3).";
+export const DECLINED_REASON = "Not selected — the creator left this unticked (spec §4.3).";

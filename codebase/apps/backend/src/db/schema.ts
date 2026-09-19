@@ -147,6 +147,10 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   chosenAngleIndex: integer("chosen_angle_index"),
   // The (approved) outline the draft was written from (spec §3 step 6): {sections: [{heading, keyPoints}]}
   outline: jsonb("outline"),
+  // image-concepts (spec §3 step 10): the 2–3 concepts shown at the image gate, and the
+  // chosen one as text — or "none" when the creator wanted no hero image.
+  imageConcepts: jsonb("image_concepts"),
+  chosenImageConcept: text("chosen_image_concept"),
   state: runState("state").notNull().default("discovering"), // DR-9.4
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),

@@ -3,12 +3,9 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { addEditDiff, getUserById, setDraftBlogType, updateDraftMarkdown } from "../../db/commands";
 import { getDraftByRun } from "../../db/queries";
-import { approvedKinds } from "../../modules/generation/channels";
 import { patchDraftMarkdown } from "../../modules/publishing";
-import { profileOf, type RunContext } from "../context";
+import type { RunContext } from "../context";
 import { defineGate } from "./gate";
-import { schema } from "../../db/client";
-import { eq } from "drizzle-orm";
 
 // The approval gate (spec §5, AR-10.5). Always `ask`, for every user — it has no setting
 // and is the one gate resolveGate does not handle. It never expires the DRAFT: the wait
@@ -64,9 +61,8 @@ export const draftGate = defineGate<ApprovalEventPayload>({
     throw new Error("the draft gate is always ask — it has no auto setting (spec §4.1)");
   },
   /**
-   * Approve: edits (FR-6.9) and blogType land on the draft and its Sanity doc; the ticked
-   * derivatives — narrowed to what the profile supports — are stored as drafts.channels,
-   * which the derive steps read (spec §4.1).
+   * Approve: edits (FR-6.9) and blogType land on the draft and its Sanity doc. The ticked
+   * derivatives travel in the same payload but belong to the derivatives gate (gates/derivatives.ts).
    */
   apply: async (ctx: RunContext, choice) => {
     if (choice.action !== "approve") return;
@@ -74,7 +70,6 @@ export const draftGate = defineGate<ApprovalEventPayload>({
     const draft = await getDraftByRun(db, ctx.runId);
     if (!draft) throw new Error(`run ${ctx.runId} has no draft to approve`);
     if (choice.blogType) await setDraftBlogType(db, draft.id, choice.blogType);
-    await db.update(schema.drafts).set({ channels: approvedKinds(profileOf(ctx), choice.channels) }).where(eq(schema.drafts.id, draft.id));
     const edited = choice.editedMarkdown;
     if (edited && draft.markdown != null && edited !== draft.markdown) {
       await addEditDiff(db, { draftId: draft.id, userId: ctx.userId, before: draft.markdown, after: edited });

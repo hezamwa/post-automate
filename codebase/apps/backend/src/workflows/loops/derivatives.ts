@@ -14,11 +14,14 @@ export interface DeriveAllInput {
   draftId: string;
   revisionNo: number;
   source?: { title?: string; excerpt?: string; imageAlt?: string };
+  /** The text changed since the last derivation (edits on re-approval after a hold). */
+  force?: boolean;
 }
 
 export async function deriveAll(step: WorkflowStep, ctx: RunContext, input: DeriveAllInput, suffix?: string): Promise<void> {
   const { draftId, revisionNo } = input;
-  await runChannel(step, ctx, deriveX, { draftId, revisionNo }, suffix);
-  await runChannel(step, ctx, deriveLinkedIn, { draftId, revisionNo }, suffix);
-  await runStep(step, ctx, translate, { draftId, revisionNo, source: input.source ?? {} }, suffix);
+  const force = input.force ?? false;
+  await runChannel(step, ctx, deriveX, { draftId, revisionNo, force }, suffix);
+  await runChannel(step, ctx, deriveLinkedIn, { draftId, revisionNo, force }, suffix);
+  await runStep(step, ctx, translate, { draftId, revisionNo, force, source: input.source ?? {} }, suffix);
 }

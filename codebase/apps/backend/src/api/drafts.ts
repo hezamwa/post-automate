@@ -8,8 +8,11 @@ import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { retractPublished, retractTranslatedEdition } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
-import { approveDirect, rejectDirect } from "../workflows/direct";
+import { approveDirect, rejectDirect, runContextFor } from "../workflows/direct";
+import { derivativesGate } from "../workflows/gates/derivatives";
 import { approvalSchema, DRAFT_EVENT_TYPE } from "../workflows/gates/draft";
+import { gateEventType } from "../workflows/gates/wait";
+import { profileOf } from "../workflows/context";
 
 // Design §7: drafts queue + decisions (FR-7.x). JWT-authenticated (FR-2.2); every
 // query is scoped to the authenticated user, and a foreign draft reads as 404 —
@@ -33,7 +36,14 @@ export const drafts = new Hono<AuthedEnv>()
     if (!detail) return c.json({ error: "draft not found" }, 404);
     // Spec §5.2: the first open by the owner is recorded — auto-publish and reminders read it.
     if (!detail.draft.seenAt) await markDraftSeen(db, detail.draft.id);
-    return c.json(detail);
+    // Spec §4.1: the derivatives gate is rendered on the approve screen — the supported kinds,
+    // pre-ticked, and whether the creator sees them at all (auto = the profile decides).
+    const run = await db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, detail.draft.runId) });
+    const ctx = run ? await runContextFor(c.env, db, run).catch(() => null) : null;
+    const gates = ctx
+      ? { derivatives: { setting: profileOf(ctx).gates.derivatives, ...(await derivativesGate.options(ctx)) }, publish: { setting: profileOf(ctx).gates.publish } }
+      : null;
+    return c.json({ ...detail, gates });
   })
 
   // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?, channels?,
@@ -153,6 +163,26 @@ export const drafts = new Hono<AuthedEnv>()
     const dropped = await dropDraftTranslation(db, draft.id);
     if (!dropped) return c.json({ error: "this draft has no translation at its current revision" }, 404);
     return c.json({ ok: true });
+  })
+
+  // Spec §4.3 / brief §6: the publish gate's hold, from the draft — back to the queue, nothing goes live.
+  .post("/:id/hold", async (c) => {
+    const db = createDb(c.env);
+    const draft = await db.query.drafts.findFirst({
+      where: and(eq(schema.drafts.id, c.req.param("id")), eq(schema.drafts.userId, c.get("userId"))),
+    });
+    if (!draft) return c.json({ error: "draft not found" }, 404);
+    const run = await db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, draft.runId) });
+    if (run?.gate === "publish" && run.workflowInstanceId) {
+      try {
+        const instance = await c.env.PIPELINE.get(run.workflowInstanceId);
+        await instance.sendEvent({ type: gateEventType("publish"), payload: { optionId: "hold" } });
+        return c.json({ ok: true, via: "workflow" });
+      } catch {
+        return c.json({ error: "the run's instance is not reachable" }, 409);
+      }
+    }
+    return c.json({ error: "this draft is not waiting at the publish gate" }, 409);
   })
 
   // FR-7.8: cancel a scheduled publish before publish_at

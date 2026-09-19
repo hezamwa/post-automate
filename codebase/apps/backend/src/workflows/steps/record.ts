@@ -21,12 +21,13 @@ export const recordInputSchema = z.discriminatedUnion("outcome", [
   }),
   z.object({ outcome: z.literal("stale"), draftId: z.string().uuid() }),
   z.object({ outcome: z.literal("abandoned"), gate: z.string() }),
+  z.object({ outcome: z.literal("held") }),
 ]);
 
 export const record = defineStep({
   name: "record",
   input: recordInputSchema,
-  output: z.object({ state: z.enum(["skipped", "failed", "rejected", "stale", "abandoned"]) }),
+  output: z.object({ state: z.enum(["skipped", "failed", "rejected", "stale", "abandoned", "held"]) }),
   retries: RETRY.io,
   run: async (ctx, input) => {
     const db = createDb(ctx.env);
@@ -55,6 +56,11 @@ export const record = defineStep({
         await setRunState(db, ctx.runId, "rejected", `rejected: ${input.category}`);
         break;
       }
+      case "held":
+        // Publish gate "hold" (spec §4.3, §5): back to the drafts queue, nothing goes live;
+        // the derivatives already produced stay with the draft.
+        await setRunState(db, ctx.runId, "pending_approval");
+        break;
       case "abandoned":
         // Spec §4.2: a pre-draft gate unanswered for 30 days. The small spend so far stays
         // attributed to the run (spend_ledger.run_id); never auto-proceed.
