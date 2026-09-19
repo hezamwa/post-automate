@@ -20,12 +20,13 @@ export const recordInputSchema = z.discriminatedUnion("outcome", [
     category: z.enum(["quality", "changed_mind", "other"]),
   }),
   z.object({ outcome: z.literal("stale"), draftId: z.string().uuid() }),
+  z.object({ outcome: z.literal("abandoned"), gate: z.string() }),
 ]);
 
 export const record = defineStep({
   name: "record",
   input: recordInputSchema,
-  output: z.object({ state: z.enum(["skipped", "failed", "rejected", "stale"]) }),
+  output: z.object({ state: z.enum(["skipped", "failed", "rejected", "stale", "abandoned"]) }),
   retries: RETRY.io,
   run: async (ctx, input) => {
     const db = createDb(ctx.env);
@@ -54,6 +55,11 @@ export const record = defineStep({
         await setRunState(db, ctx.runId, "rejected", `rejected: ${input.category}`);
         break;
       }
+      case "abandoned":
+        // Spec §4.2: a pre-draft gate unanswered for 30 days. The small spend so far stays
+        // attributed to the run (spend_ledger.run_id); never auto-proceed.
+        await setRunState(db, ctx.runId, "abandoned", `abandoned at the ${input.gate} gate — no answer in 30 days (spec §4.2)`);
+        break;
       case "stale":
         // Nothing is lost: markdown kept, Sanity draft kept, still first in the queue.
         // approve/reject work through direct handling; reminders keep going weekly.

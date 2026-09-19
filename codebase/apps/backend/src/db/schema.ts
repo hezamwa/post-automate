@@ -2,6 +2,7 @@
 // Sanity is the source of truth for content; this DB owns pipeline state (§9 of requirements).
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   check,
   integer,
@@ -29,8 +30,9 @@ export const runState = pgEnum("run_state", [
   "published",
   "skipped",
   "rejected",
-  "expired",
+  "expired", // legacy (v1 draft timeout) — nothing writes it since the no-expiry phase
   "failed",
+  "abandoned", // a pre-draft gate unanswered for 30 days (spec §4.2) — never auto-proceeded
 ]);
 export const candidateSource = pgEnum("candidate_source", ["discovered", "user"]);
 // `expired` is LEGACY (v1 7-day timeout, removed in v2 — spec §5 "no expiry"): kept only
@@ -138,6 +140,11 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   // render the picker for user-requested runs (FR-6.3) and change-angle (FR-7.9 names
   // "stored angle proposals"; design §3 never gave them a home — this is it)
   angleProposals: jsonb("angle_proposals"),
+  // Gates (spec §4): the gate the run is waiting on (null when not waiting) and what was
+  // chosen so far — the run row must carry the choices to resume the workflow.
+  gate: text("gate"),
+  chosenTopicId: uuid("chosen_topic_id").references((): AnyPgColumn => topicCandidates.id), // typed: the two tables reference each other
+  chosenAngleIndex: integer("chosen_angle_index"),
   state: runState("state").notNull().default("discovering"), // DR-9.4
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
@@ -152,6 +159,7 @@ export const topicCandidates = pgTable("topic_candidates", {
   source: candidateSource("source").notNull().default("discovered"),
   title: text("title").notNull(),
   summary: text("summary").notNull(),
+  whyItMatters: text("why_it_matters"), // shown on the topic gate (spec §4.3); nullable for pre-v2 rows
   sourceUrls: jsonb("source_urls").notNull().default([]),
   score: numeric("score"),
   rejectionReason: text("rejection_reason"),
@@ -334,4 +342,19 @@ export const userLimits = pgTable("user_limits", {
   maxRunsPerDay: integer("max_runs_per_day").notNull().default(2),
   maxReqPerMin: integer("max_req_per_min").notNull().default(30),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Every gate choice, copied from the run row (spec §4.3): the preference log for profile
+// refinement — which topics this creator picks, which angles, what they edit. Append-only.
+export const gateChoices = pgTable("gate_choices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  gate: text("gate").notNull(),
+  optionsShown: jsonb("options_shown").notNull(),
+  choice: jsonb("choice").notNull(),
+  freeText: text("free_text"),
+  /** "user" answered, or "auto" took the recommendation (spec §4.2). */
+  source: text("source").notNull().default("user"),
+  chosenAt: timestamp("chosen_at", { withTimezone: true }).notNull().defaultNow(),
 });

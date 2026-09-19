@@ -113,6 +113,7 @@ export async function synthesizeCandidates(env: Env, db: Db, ctx: RunCtx, fetche
         source: "discovered",
         title: c.title,
         summary: c.summary,
+        whyItMatters: c.whyItMatters,
         sourceUrls: c.sourceUrls,
       })
       .returning({ id: schema.topicCandidates.id });
@@ -180,6 +181,7 @@ export async function researchTopic(
       source: "user",
       title: brief.title,
       summary,
+      whyItMatters: brief.whyItMatters,
       sourceUrls: brief.sourceUrls,
       selected: true,
     })
@@ -191,4 +193,21 @@ export async function researchTopic(
     whyItMatters: brief.whyItMatters,
     sourceUrls: brief.sourceUrls,
   };
+}
+
+/** A persisted candidate row as the pipeline carries it. */
+export function candidateFromRow(row: typeof schema.topicCandidates.$inferSelect): CandidateRef {
+  return {
+    id: row.id,
+    title: row.title,
+    summary: row.summary,
+    whyItMatters: row.whyItMatters ?? "",
+    sourceUrls: (row.sourceUrls as string[]) ?? [],
+  };
+}
+
+/** The creator picked a candidate at the topic gate (spec §4.3): it becomes the selected one. */
+export async function selectCandidate(db: Db, runId: string, candidateId: string): Promise<void> {
+  await db.update(schema.topicCandidates).set({ selected: false }).where(eq(schema.topicCandidates.runId, runId));
+  await db.update(schema.topicCandidates).set({ selected: true, rejectionReason: null }).where(eq(schema.topicCandidates.id, candidateId));
 }

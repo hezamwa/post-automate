@@ -11,9 +11,9 @@ an edit, not a rename cascade.
 | 2 | `steps/load-profile.ts` | §3 step 2 |
 | 3a | `steps/search.ts` — snippet-only, one search | §3 step 3a |
 | 3b | `steps/synthesize-candidates.ts` | §3 step 3b |
-| 3c | `steps/score.ts` | §3 step 3c |
+| 3c | `steps/score.ts` → `gates/topic.ts` (pick · free text → `research` · auto) | §3 step 3c, §4.3 |
 | 3d | `steps/research.ts` — user-topic runs only (after `search`) | §3 step 3d |
-| 5 | `steps/angles.ts` → `gates/angle.ts` | §3 step 5, §4.3 |
+| 5 | `steps/angles.ts` → `gates/angle.ts` (pick · free text = a fourth angle · auto) | §3 step 5, §4.3 |
 | 7 | `steps/draft.ts` | §3 step 7 |
 | 9 | `steps/save-draft.ts` | §3 step 9 |
 | 11 | `steps/hero-image.ts` | §3 step 11 |
@@ -29,7 +29,10 @@ runs approve → derivatives → publish inline for a draft whose instance is go
 with the same step definitions.
 
 Contracts: `steps/step.ts` (`defineStep`, `runStep`, retry policies), `gates/gate.ts`
-(`defineGate`, `applyGate`), `gates/options.ts` (the one option shape), `context.ts`
+(`defineGate`, `applyGate`, `resolveGate` — spec §4.2: auto takes the recommendation; ask
+waits 2 minutes, pushes, 3 days, reminds, 27 days, then abandons the run; `gates/wait.ts`
+holds the wait chain, `gates/registry.ts` the answerable gates for the API), `gates/options.ts`
+(the one option shape), `context.ts`
 (`RunContext`). Prompts: one file per LLM call in `prompts/`, each exporting a
 `PROMPT_VERSION` and a pure builder; the `draft` prompt sets the cache breakpoint after its
 stable prefix (design §6).

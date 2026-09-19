@@ -20,11 +20,19 @@ type DraftRow = typeof schema.drafts.$inferSelect;
 
 export { GateError };
 
+type RunRow = typeof schema.pipelineRuns.$inferSelect;
+
+/** A context for work on a run's behalf outside the engine, pinned to the run's profile version. */
+export async function runContextFor(env: Env, db: Db, run: RunRow): Promise<RunContext> {
+  const ctx = createRunContext(env, { runId: run.id, userId: run.userId, ...(run.userTopic ? { userTopic: run.userTopic as RunContext["userTopic"] } : {}) });
+  pinProfile(ctx, await getProfileVersion(db, run.userId, run.profileVersion));
+  return ctx;
+}
+
 async function contextFor(env: Env, db: Db, draft: DraftRow): Promise<RunContext> {
   const run = await db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, draft.runId) });
   if (!run) throw new Error(`draft ${draft.id} has no run`);
-  const ctx = createRunContext(env, { runId: run.id, userId: run.userId });
-  pinProfile(ctx, await getProfileVersion(db, run.userId, run.profileVersion));
+  const ctx = await runContextFor(env, db, run);
   ctx.revision = await latestDerivativeRevision(db, draft.id);
   return ctx;
 }

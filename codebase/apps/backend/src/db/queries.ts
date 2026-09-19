@@ -304,3 +304,13 @@ export async function undecidedDraft(db: Db, userId: string) {
     orderBy: desc(schema.drafts.createdAt),
   });
 }
+
+/** The run's candidates best-first, for the topic gate (spec §4.3) and GET /runs/:id. */
+export async function scoredCandidates(db: Db, runId: string) {
+  const rows = await db.select().from(schema.topicCandidates).where(eq(schema.topicCandidates.runId, runId));
+  return rows.sort((a, b) => Number(b.score ?? -1) - Number(a.score ?? -1));
+}
+
+export async function gateChoicesForRun(db: Db, runId: string) {
+  return db.select().from(schema.gateChoices).where(eq(schema.gateChoices.runId, runId)).orderBy(asc(schema.gateChoices.chosenAt));
+}

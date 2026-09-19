@@ -4,16 +4,19 @@ import { z } from "zod";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
 import { createRun } from "../db/commands";
-import { undecidedDraft } from "../db/queries";
+import { gateChoicesForRun, undecidedDraft } from "../db/queries";
 import { checkTopicRequest } from "../modules/discovery";
 import { getActiveProfile } from "../modules/profiles";
 import { getFlags } from "../shared/flags";
 import type { Env } from "../shared/env";
 import type { Db } from "../db/client";
+import { runContextFor } from "../workflows/direct";
+import { answerableGate } from "../workflows/gates/registry";
+import { gateEventType } from "../workflows/gates/wait";
 
-// Design §7: run history + triggers. JWT-authenticated (FR-2.2); runs are always
-// created for the authenticated user — never for a user named in the request (FR-2.3).
-// User-chosen topics go through /request ONLY: it owns the FR-7.7 banned-topic
+// Design §7: run history, triggers, and gates (spec §4). JWT-authenticated (FR-2.2); runs
+// are always created for the authenticated user — never for a user named in the request
+// (FR-2.3). User-chosen topics go through /request ONLY: it owns the FR-7.7 banned-topic
 // warn-and-override flow, which a topic smuggled into /trigger would bypass.
 
 const requestSchema = z
@@ -24,6 +27,8 @@ const requestSchema = z
     overrideBannedTopics: z.boolean().optional(),
   })
   .strict();
+
+const RUNS_PAUSED = { error: "New pipeline runs are paused by an administrator — resume runs in admin settings (FR-15.12)." };
 
 /**
  * Spec §2 / FR-7.4 (v2): one undecided draft is the limit. The Generate button opens it
@@ -42,11 +47,7 @@ async function refuseWhilePending(db: Db, userId: string) {
 async function launchRun(
   c: { env: Env },
   db: Db,
-  args: {
-    userId: string;
-    profileVersion: number;
-    userTopic?: { title: string; notes?: string; links?: string[] };
-  },
+  args: { userId: string; profileVersion: number; userTopic?: { title: string; notes?: string; links?: string[] } },
 ): Promise<{ runId: string; workflowInstanceId: string }> {
   const run = await createRun(db, {
     userId: args.userId,
@@ -58,24 +59,46 @@ async function launchRun(
     id: run.id,
     params: { runId: run.id, userId: args.userId, userTopic: args.userTopic },
   });
-  await db
-    .update(schema.pipelineRuns)
-    .set({ workflowInstanceId: instance.id })
-    .where(eq(schema.pipelineRuns.id, run.id));
+  await db.update(schema.pipelineRuns).set({ workflowInstanceId: instance.id }).where(eq(schema.pipelineRuns.id, run.id));
   return { runId: run.id, workflowInstanceId: instance.id };
+}
+
+async function ownRun(db: Db, runId: string, userId: string) {
+  const run = await db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, runId) });
+  return run && run.userId === userId ? run : null;
+}
+
+/** Deliver a gate answer to the live instance; 409 (as a message) when the run is not waiting on it. */
+async function answerGate(c: { env: Env }, db: Db, run: typeof schema.pipelineRuns.$inferSelect, gateName: string, body: unknown) {
+  const gate = answerableGate(gateName);
+  if (!gate) return { status: 404 as const, json: { error: `unknown gate '${gateName}' — answerable gates: topic, angle` } };
+  const parsed = gate.choice.safeParse(body);
+  if (!parsed.success) return { status: 400 as const, json: { error: `invalid answer for the ${gateName} gate: ${parsed.error.issues[0]?.message ?? "bad body"}` } };
+  if (run.gate !== gateName) {
+    return { status: 409 as const, json: { error: run.gate ? `this run is waiting on the ${run.gate} gate, not ${gateName}` : "this run is not waiting on any gate" } };
+  }
+  if (!run.workflowInstanceId) return { status: 409 as const, json: { error: "run has no workflow instance" } };
+  try {
+    const instance = await c.env.PIPELINE.get(run.workflowInstanceId);
+    await instance.sendEvent({ type: gateEventType(gateName), payload: parsed.data });
+  } catch {
+    return { status: 409 as const, json: { error: `the run's instance is not reachable — it may have been abandoned (spec §4.2)` } };
+  }
+  return { status: 200 as const, json: { ok: true } };
 }
 
 export const runs = new Hono<AuthedEnv>()
   .use("*", requireAuth)
 
   // Run history + states (DR-9.4) — includes angleProposals so the app can render the
-  // angle picker for user-requested runs (FR-6.3) and change-angle options (FR-7.9)
+  // angle picker and change-angle options (FR-7.9)
   .get("/", async (c) => {
     const rows = await createDb(c.env)
       .select({
         id: schema.pipelineRuns.id,
         trigger: schema.pipelineRuns.trigger,
         state: schema.pipelineRuns.state,
+        gate: schema.pipelineRuns.gate,
         error: schema.pipelineRuns.error,
         userTopic: schema.pipelineRuns.userTopic,
         angleProposals: schema.pipelineRuns.angleProposals,
@@ -93,13 +116,7 @@ export const runs = new Hono<AuthedEnv>()
   // Manual pipeline run — discovery picks the topic. For a topic of your own, use /request.
   .post("/trigger", async (c) => {
     const db = createDb(c.env);
-    // FR-15.12c: refused before the run row even exists — no skipped-run noise from a pause
-    if ((await getFlags(db))["runs.paused"]) {
-      return c.json(
-        { error: "New pipeline runs are paused by an administrator — resume runs in admin settings (FR-15.12)." },
-        503,
-      );
-    }
+    if ((await getFlags(db))["runs.paused"]) return c.json(RUNS_PAUSED, 503); // FR-15.12c: before the run row exists
     const userId = c.get("userId");
     const pending = await refuseWhilePending(db, userId);
     if (pending) return c.json(pending, 409);
@@ -120,12 +137,7 @@ export const runs = new Hono<AuthedEnv>()
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid body" }, 400);
     const topic = parsed.data;
     const db = createDb(c.env);
-    if ((await getFlags(db))["runs.paused"]) {
-      return c.json(
-        { error: "New pipeline runs are paused by an administrator — resume runs in admin settings (FR-15.12)." },
-        503,
-      );
-    }
+    if ((await getFlags(db))["runs.paused"]) return c.json(RUNS_PAUSED, 503);
     const userId = c.get("userId");
     const pending = await refuseWhilePending(db, userId);
     if (pending) return c.json(pending, 409);
@@ -148,34 +160,44 @@ export const runs = new Hono<AuthedEnv>()
         409,
       );
     }
-    const launched = await launchRun(c, db, {
-      userId,
-      profileVersion,
-      userTopic: { title: topic.title, notes: topic.notes, links: topic.links },
-    });
+    const launched = await launchRun(c, db, { userId, profileVersion, userTopic: { title: topic.title, notes: topic.notes, links: topic.links } });
     return c.json({ ...launched, warnings }); // dedup similarity is informational (FR-7.7)
   })
 
-  // FR-6.3: the requester picks one of the 3 proposals; 24h timeout auto-picks
+  // Spec §4 / brief §6: one payload renders any gate — state, the gate the run is waiting
+  // on with its options, and every choice made so far.
+  .get("/:id", async (c) => {
+    const db = createDb(c.env);
+    const run = await ownRun(db, c.req.param("id"), c.get("userId"));
+    if (!run) return c.json({ error: "run not found" }, 404);
+    const waiting = run.gate ? answerableGate(run.gate) : undefined;
+    const options = waiting ? await waiting.options(await runContextFor(c.env, db, run)) : null;
+    const { workflowInstanceId: _instance, ...row } = run;
+    return c.json({
+      run: row,
+      gate: run.gate ? { name: run.gate, ...(options ?? {}) } : null,
+      choices: (await gateChoicesForRun(db, run.id)).map((g) => ({ gate: g.gate, choice: g.choice, freeText: g.freeText, source: g.source, chosenAt: g.chosenAt })),
+    });
+  })
+
+  // Spec §4 / brief §6: answer the gate the run is waiting on — { optionId } | { freeText }.
+  .post("/:id/gates/:gate", async (c) => {
+    const db = createDb(c.env);
+    const run = await ownRun(db, c.req.param("id"), c.get("userId"));
+    if (!run) return c.json({ error: "run not found" }, 404);
+    const result = await answerGate(c, db, run, c.req.param("gate"), await c.req.json().catch(() => ({})));
+    return c.json(result.json, result.status);
+  })
+
+  // Deprecated alias for the angle gate (the shipped app still posts { angleIndex } here).
   .post("/:id/angle", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { angleIndex?: unknown };
     if (typeof body.angleIndex !== "number" || !Number.isInteger(body.angleIndex) || body.angleIndex < 0) {
       return c.json({ error: "Body must include { angleIndex: 0 | 1 | 2 }." }, 400);
     }
     const db = createDb(c.env);
-    const run = await db.query.pipelineRuns.findFirst({
-      where: eq(schema.pipelineRuns.id, c.req.param("id")),
-    });
-    if (!run || run.userId !== c.get("userId")) return c.json({ error: "run not found" }, 404);
-    if (run.trigger !== "user_topic") {
-      return c.json({ error: "only user-requested runs wait for an angle choice (FR-6.3)" }, 409);
-    }
-    if (!run.workflowInstanceId) return c.json({ error: "run has no workflow instance" }, 409);
-    try {
-      const instance = await c.env.PIPELINE.get(run.workflowInstanceId);
-      await instance.sendEvent({ type: "angle-choice", payload: { angleIndex: body.angleIndex } });
-    } catch {
-      return c.json({ error: "this run is not waiting for an angle choice (it may have timed out and auto-picked)" }, 409);
-    }
-    return c.json({ ok: true });
+    const run = await ownRun(db, c.req.param("id"), c.get("userId"));
+    if (!run) return c.json({ error: "run not found" }, 404);
+    const result = await answerGate(c, db, run, "angle", { optionId: String(body.angleIndex) });
+    return c.json(result.json, result.status);
   });

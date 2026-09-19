@@ -178,3 +178,21 @@ describe("profileSchemaV1 (historic shape — DR-9.15)", () => {
     expect(profileSchemaV1.safeParse({ ...rest, language: "en" }).success).toBe(false);
   });
 });
+
+describe("profileSchema — gates and autoRun (article-workflow §4.1, §2)", () => {
+  it("applies the spec's defaults: every pre-draft gate auto, derivatives ask, publish auto, autoRun off", () => {
+    const p = profileSchema.parse(base);
+    expect(p.gates).toEqual({ topic: "auto", angle: "auto", outline: "auto", image: "auto", derivatives: "ask", publish: "auto" });
+    expect(p.autoRun).toBe(false);
+  });
+
+  it("accepts a partial gates object and fills the rest", () => {
+    expect(profileSchema.parse({ ...base, gates: { topic: "ask" } }).gates.topic).toBe("ask");
+    expect(profileSchema.parse({ ...base, gates: { topic: "ask" } }).gates.angle).toBe("auto");
+  });
+
+  it("rejects an unknown gate or a value other than ask|auto — the draft gate has no setting", () => {
+    expect(profileSchema.safeParse({ ...base, gates: { draft: "auto" } }).success).toBe(false);
+    expect(profileSchema.safeParse({ ...base, gates: { topic: "sometimes" } }).success).toBe(false);
+  });
+});

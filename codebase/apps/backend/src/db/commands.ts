@@ -41,7 +41,7 @@ export async function setRunAngleProposals(
 }
 
 export async function setRunState(db: Db, runId: string, state: RunState, error?: string): Promise<void> {
-  const terminal: RunState[] = ["published", "skipped", "rejected", "expired", "failed"];
+  const terminal: RunState[] = ["published", "skipped", "rejected", "expired", "failed", "abandoned"];
   await db
     .update(schema.pipelineRuns)
     .set({
@@ -149,6 +149,7 @@ export async function deleteUserCascade(
     }
 
     // personal records, FK leaves first
+    await tx.delete(schema.gateChoices).where(eq(schema.gateChoices.userId, userId));
     if (draftIds.length > 0) {
       await tx.delete(schema.editDiffs).where(inArray(schema.editDiffs.draftId, draftIds));
       await tx.delete(schema.draftRevisions).where(inArray(schema.draftRevisions.draftId, draftIds));
@@ -361,5 +362,29 @@ export async function reorderRoutes(db: Db, orderedIds: string[]): Promise<void>
         .set({ priority: i, updatedAt: new Date() })
         .where(eq(schema.aiRoutes.id, id));
     }
+  });
+}
+
+// ── Gates (spec §4) ──────────────────────────────────────────────────────────────────
+
+/** The gate the run is waiting on — null once answered. GET /runs/:id and the answer route read it. */
+export async function setRunGate(db: Db, runId: string, gate: string | null): Promise<void> {
+  await db.update(schema.pipelineRuns).set({ gate }).where(eq(schema.pipelineRuns.id, runId));
+}
+
+/** Spec §4.3: every choice is copied to the preference log, with what the creator saw. */
+export async function recordGateChoice(
+  db: Db,
+  args: { runId: string; userId: string; gate: string; optionsShown: unknown; choice: unknown; source: "user" | "auto" },
+): Promise<void> {
+  const freeText = typeof args.choice === "object" && args.choice && "freeText" in args.choice ? String((args.choice as { freeText: unknown }).freeText) : null;
+  await db.insert(schema.gateChoices).values({
+    runId: args.runId,
+    userId: args.userId,
+    gate: args.gate,
+    optionsShown: args.optionsShown,
+    choice: args.choice,
+    freeText,
+    source: args.source,
   });
 }

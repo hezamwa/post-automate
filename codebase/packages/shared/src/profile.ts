@@ -99,6 +99,21 @@ const commonFields = {
   compliance: complianceSchema.optional(),
 };
 
+// Pre-draft and post-approval gates (article-workflow §4.1): `ask` pauses the run for the
+// creator, `auto` takes the recommendation. The draft gate has no setting — it is always
+// ask. Defaults are the spec's; older payloads parse with them (additive, still shape v2).
+export const gateSettingSchema = z.enum(["ask", "auto"]);
+export const gatesSchema = z
+  .object({
+    topic: gateSettingSchema.default("auto"),
+    angle: gateSettingSchema.default("auto"),
+    outline: gateSettingSchema.default("auto"),
+    image: gateSettingSchema.default("auto"),
+    derivatives: gateSettingSchema.default("ask"),
+    publish: gateSettingSchema.default("auto"),
+  })
+  .strict();
+
 function requireMedicalCompliance(
   profile: { domain: { field: "tech" | "medical" }; compliance?: unknown },
   ctx: z.RefinementCtx,
@@ -120,6 +135,9 @@ export const profileSchema = z
     primaryLanguage: languageSchema,
     // FR-3.13: opt-in, independent of primaryLanguage; required so "off" is stated, not implied.
     translation: translationSchema,
+    // article-workflow §4.1 — per-gate ask|auto; §2 — scheduled runs only for opted-in creators.
+    gates: gatesSchema.default({}),
+    autoRun: z.boolean().default(false),
   })
   // design §4 specifies "additionalProperties": false throughout. Strict, not stripping:
   // an invented field — especially from the interview's structured output (FR-4.2) —
@@ -161,6 +179,8 @@ export const profileSchemaV1 = z
   .superRefine(requireMedicalCompliance);
 
 export type Profile = z.infer<typeof profileSchema>;
+export type GateName = keyof Profile["gates"];
+export type GateSetting = z.infer<typeof gateSettingSchema>;
 export type ProfileV1 = z.infer<typeof profileSchemaV1>;
 export type Compliance = z.infer<typeof complianceSchema>;
 export type Language = z.infer<typeof languageSchema>;

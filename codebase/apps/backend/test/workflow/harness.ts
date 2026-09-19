@@ -88,7 +88,7 @@ export async function seedCandidates(params: PipelineParams, briefs: Array<{ tit
   for (const b of briefs) {
     const [row] = await shared.db
       .insert(schema.topicCandidates)
-      .values({ runId: params.runId, userId: params.userId, title: b.title, summary: b.summary, sourceUrls: b.sourceUrls })
+      .values({ runId: params.runId, userId: params.userId, title: b.title, summary: b.summary, whyItMatters: b.whyItMatters, sourceUrls: b.sourceUrls })
       .returning({ id: schema.topicCandidates.id });
     refs.push({ id: row!.id, ...b });
   }

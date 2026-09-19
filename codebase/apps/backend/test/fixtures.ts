@@ -1,8 +1,11 @@
-import type { Profile } from "@post-automate/shared";
+import { profileSchema, type Profile } from "@post-automate/shared";
 
-/** Minimal valid tech profile — every field the schema demands, nothing more. */
-export function techProfile(overrides: Partial<Profile> = {}): Profile {
-  return {
+type ProfileOverrides = Partial<Omit<Profile, "gates">> & { gates?: Partial<Profile["gates"]> };
+
+/** Minimal valid tech profile — every field the schema demands, nothing more; defaults applied. */
+export function techProfile(overrides: ProfileOverrides = {}): Profile {
+  const { gates, ...rest } = overrides;
+  return profileSchema.parse({
     identity: { displayName: "Test Creator" },
     domain: { field: "tech", subNiches: ["ai tooling"] },
     voice: {
@@ -22,6 +25,10 @@ export function techProfile(overrides: Partial<Profile> = {}): Profile {
     examplePosts: ["example one", "example two"],
     aiDisclosure: false,
     channels: ["x", "linkedin"],
-    ...overrides,
-  } as Profile;
+    ...rest,
+    ...(gates ? { gates } : {}),
+  });
 }
+
+/** Every pre-draft gate set to ask — the guided run of spec §4.2. */
+export const GUIDED_GATES: Profile["gates"] = { topic: "ask", angle: "ask", outline: "ask", image: "ask", derivatives: "ask", publish: "ask" };

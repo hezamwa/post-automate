@@ -2,8 +2,9 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import type { Env } from "../shared/env";
 import { createRunContext, pinProfile, type PipelineParams } from "./context";
 import { chooseAngle } from "./gates/angle";
-import { applyGate } from "./gates/gate";
 import { draftGate, waitForDraftDecision } from "./gates/draft";
+import { applyGate, RunAbandonedError } from "./gates/gate";
+import { chooseTopic } from "./gates/topic";
 import { deriveAll } from "./loops/derivatives";
 import { reviewable, reviewLoop } from "./loops/revise";
 import { angles } from "./steps/angles";
@@ -44,19 +45,23 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
     // 2. load-profile — pins the profile version for the whole run
     pinProfile(ctx, await runStep(step, ctx, loadProfile, {}));
 
-    // 3. topic — snippet search feeds targeted research (user topic) or synthesis + scoring
+    // 3. topic — snippet search feeds targeted research (user topic) or synthesis + scoring,
+    // then the topic gate (pick, free text → research, or auto)
     const { results: fetched } = await runStep(step, ctx, search, { query: ctx.userTopic?.title });
-    const topic = ctx.userTopic
-      ? await runStep(step, ctx, research, { userTopic: ctx.userTopic, fetched })
-      : await runStep(step, ctx, score, { candidates: await runStep(step, ctx, synthesizeCandidates, { fetched }) });
-    if (!topic) {
-      await runStep(step, ctx, record, { outcome: "skipped", reason: "no candidate scored ≥6 (FR-5.2)", kind: "no_topic" }, "no-topic");
-      return;
+    let topic;
+    if (ctx.userTopic) {
+      topic = await runStep(step, ctx, research, { userTopic: ctx.userTopic, fetched });
+    } else {
+      const best = await runStep(step, ctx, score, { candidates: await runStep(step, ctx, synthesizeCandidates, { fetched }) });
+      if (!best) {
+        await runStep(step, ctx, record, { outcome: "skipped", reason: "no candidate scored ≥6 (FR-5.2)", kind: "no_topic" }, "no-topic");
+        return;
+      }
+      topic = await chooseTopic(step, ctx);
     }
 
     // 5. angles → angle gate
-    const proposals = await runStep(step, ctx, angles, { topic });
-    const angle = proposals.angles[await chooseAngle(step, ctx, proposals)]!;
+    const { angle, proposals } = await chooseAngle(step, ctx, await runStep(step, ctx, angles, { topic }));
 
     // 7. draft → 9. save-draft
     const drafted = await runStep(step, ctx, draft, { topic, angle });
@@ -100,6 +105,7 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
         return;
     }
   } catch (e) {
+    if (e instanceof RunAbandonedError) return; // recorded by the gate; a decision, not a failure
     await runStep(step, ctx, record, { outcome: "failed", message: e instanceof Error ? e.message.slice(0, 500) : "unknown" }, "failure");
     throw e;
   }

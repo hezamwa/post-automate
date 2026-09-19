@@ -15,7 +15,8 @@ import { applyMigrations, type TestDb } from "./harness";
 
 /** The old payload shape, derived from the current fixture and kept honest via profileSchemaV1. */
 function v1Payload(language: "ar" | "en" | "bilingual") {
-  const { primaryLanguage: _p, translation: _t, ...common } = techProfile();
+  // v1 predates gates/autoRun (added with the v2 workflow) as well as the language split
+  const { primaryLanguage: _p, translation: _t, gates: _g, autoRun: _a, ...common } = techProfile();
   return profileSchemaV1.parse({ ...common, language });
 }
 

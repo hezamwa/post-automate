@@ -8,7 +8,8 @@ import { NonRetryableError } from "cloudflare:workflows";
 
 export interface ScriptedEvent {
   type: string;
-  payload?: unknown;
+  /** A value, or a function resolved when the wait happens — for answers that reference rows the run creates. */
+  payload?: unknown | (() => unknown | Promise<unknown>);
   /** Script an explicit timeout for the next wait of this type. */
   timeout?: true;
 }
@@ -89,7 +90,8 @@ export class FakeStep {
       throw new WaitTimeoutError(`waitForEvent '${name}' (${options.type}) timed out after ${String(options.timeout ?? "24 hours")}`);
     }
     this.waits.push({ name, type: options.type, outcome: "answered" });
-    return { type: options.type, payload: event.payload as T, timestamp: new Date() };
+    const payload = typeof event.payload === "function" ? await (event.payload as () => unknown)() : event.payload;
+    return { type: options.type, payload: payload as T, timestamp: new Date() };
   }
 
   /** Step attempts that billed more than one provider call — the spec §3 invariant. */
