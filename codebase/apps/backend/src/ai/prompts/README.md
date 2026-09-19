@@ -1,13 +1,16 @@
-# Prompt templates
+# Prompt blocks
 
-Composed templates per design §6 — stable blocks first for prompt caching:
+Shared, profile-derived blocks (design §6 "Prompt composition"), stable-first so a
+`cache_control` breakpoint after them is meaningful:
 
 ```
 system = EDITORIAL_RULES + VOICE + AUDIENCE + GUARDRAILS + FEW_SHOT   (cached prefix)
 user   = TOPIC_BRIEF (volatile)
 ```
 
-One module per task type: `interview` · `discovery` · `research` · `scoring` · `angles`
-· `article` · `shorten_x` · `translate` · `image` · `refine`.
+The builders that assemble a full call — one file per LLM prompt, each exporting a
+`PROMPT_VERSION` and a pure `build…(input) => PromptSpec` — live in
+[`src/workflows/prompts/`](../../workflows/prompts/). `spec.ts` here defines `PromptSpec`
+and `toChatRequest`, the shape the router consumes.
 
-Changes to files in this folder trigger the golden-set regression in CI (NFR-16.1).
+Changes to prompt files trigger the golden-set regression in CI (NFR-16.1).

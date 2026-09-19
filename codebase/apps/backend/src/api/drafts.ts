@@ -9,7 +9,7 @@ import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { computeNextSlot } from "../modules/publishing/schedule";
 import { deleteDraft, publishApprovedDraft, retractPublished, retractTranslatedEdition } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
-import type { ApprovalEventPayload } from "../workflows/pipeline";
+import type { ApprovalEventPayload } from "../workflows/gates/draft";
 
 // Design §7: drafts queue + decisions (FR-7.x). JWT-authenticated (FR-2.2); every
 // query is scoped to the authenticated user, and a foreign draft reads as 404 —

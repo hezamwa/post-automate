@@ -1,362 +1,118 @@
-import {
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep,
-} from "cloudflare:workers";
-import { NonRetryableError } from "cloudflare:workflows";
-import { profileSchema } from "@post-automate/shared";
-import { assertRunnable, SkipRunError } from "../ai/gates";
-import { createDb } from "../db/client";
-import {
-  addDraftRevision,
-  addEditDiff,
-  createDraft,
-  expireDraft,
-  getUserById,
-  recordDerivatives,
-  rejectDraft,
-  scheduleDraft,
-  setDraftBlogType,
-  setDraftStatus,
-  setRunAngleProposals,
-  setRunState,
-  updateDraftMarkdown,
-} from "../db/commands";
-import {
-  findTopics,
-  researchTopic,
-  scoreAndSelect,
-  type CandidateRef,
-} from "../modules/discovery";
-import {
-  ComplianceRefusalError,
-  deriveTexts,
-  proposeAngles,
-  writeArticle,
-} from "../modules/generation";
-import { getActiveProfile } from "../modules/profiles";
-import {
-  createSanityDraft,
-  deleteDraft,
-  patchDraftMarkdown,
-  publishApprovedDraft,
-} from "../modules/publishing";
-import { computeNextSlot } from "../modules/publishing/schedule";
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { Env } from "../shared/env";
-import { notifyUser } from "../shared/notify";
+import { createRunContext, pinProfile, type PipelineParams } from "./context";
+import { chooseAngle } from "./gates/angle";
+import { applyGate } from "./gates/gate";
+import { draftGate, waitForDraftDecision } from "./gates/draft";
+import { reviewLoop } from "./loops/revise";
+import { angles } from "./steps/angles";
+import { createSanityDraftStep } from "./steps/create-sanity-draft";
+import { derivatives } from "./steps/derivatives";
+import { discover } from "./steps/discover";
+import { draft } from "./steps/draft";
+import { entryGates } from "./steps/gates";
+import { loadProfile } from "./steps/load-profile";
+import { notify } from "./steps/notify";
+import { publish } from "./steps/publish";
+import { record } from "./steps/record";
+import { recordDerivativesStep } from "./steps/record-derivatives";
+import { research } from "./steps/research";
+import { saveDraft } from "./steps/save-draft";
+import { score } from "./steps/score";
+import { runStep } from "./steps/step";
 
-export interface PipelineParams {
-  runId: string;
-  userId: string;
-  /** Set for user-requested runs (FR-5.8) — replaces discover/score with targeted research. */
-  userTopic?: { title: string; notes?: string; links?: string[] };
-}
+export type { PipelineParams } from "./context";
 
-export interface ApprovalEventPayload {
-  action: "approve" | "reject" | "revise" | "change_angle" | "expired";
-  publishMode?: "now" | "next_slot"; // FR-7.5
-  editedMarkdown?: string; // FR-6.9
-  instructions?: string; // FR-7.9 (revise)
-  angleIndex?: number; // change_angle
-  rejectionCategory?: "quality" | "changed_mind" | "other"; // FR-7.8
-  blogType?: "public" | "em"; // Afnan's site: chosen per draft at approval (design §8)
-}
-
-const RETRY = { retries: { limit: 2, delay: "30 seconds" as const, backoff: "exponential" as const } };
-
-async function waitForApproval(step: WorkflowStep, n: number): Promise<ApprovalEventPayload> {
-  try {
-    const event = await step.waitForEvent<ApprovalEventPayload>(`approval-${n}`, {
-      type: "approval",
-      timeout: "7 days",
-    });
-    return event.payload;
-  } catch {
-    return { action: "expired" }; // FR-7.x: 7-day timeout
+/** One durable instance per pipeline run (AR-10.3, design §5). Orchestration only — the
+ *  ordered sequence of steps and gates from spec §1; every step is its own file. */
+export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
+  override async run(event: WorkflowEvent<PipelineParams>, step: WorkflowStep): Promise<void> {
+    await runPipeline(this.env, step, event.payload);
   }
 }
 
-/** One durable instance per pipeline run (AR-10.3, design §5). Steps are idempotent
- *  and runId-scoped; step returns must be small JSON (image bytes never cross steps). */
-export class PipelineWorkflow extends WorkflowEntrypoint<Env, PipelineParams> {
-  override async run(event: WorkflowEvent<PipelineParams>, step: WorkflowStep) {
-    const { runId, userId, userTopic } = event.payload;
-    const env = this.env;
+export async function runPipeline(env: Env, step: WorkflowStep, params: PipelineParams): Promise<void> {
+  const ctx = createRunContext(env, params);
 
-    // ── gates (design §10; FR-7.4/15.8/15.10) ────────────────────────────────
-    const gate = await step.do("gates", async () => {
-      const db = createDb(env);
-      try {
-        await assertRunnable(db, userId, { runId, userRequested: !!userTopic });
-        return { ok: true as const, skip: "", kind: "" };
-      } catch (e) {
-        if (e instanceof SkipRunError) return { ok: false as const, skip: e.reason, kind: e.kind };
-        throw new NonRetryableError(e instanceof Error ? e.message : "gate refused the run");
-      }
-    });
-    if (!gate.ok) {
-      await step.do("record-skip", async () => {
-        const db = createDb(env);
-        await setRunState(db, runId, "skipped", gate.skip);
-        if (gate.kind === "pending_drafts") {
-          // FR-7.4: a reminder push instead of a new draft
-          await notifyUser(env, db, userId, {
-            title: "Drafts waiting for your review",
-            body: "Two drafts are already pending — review them to resume scheduled runs (FR-7.4).",
-          });
-        }
-      });
+  try {
+    // 1. entry gates — caps, pauses, suspension, pending drafts. A skip is recorded as
+    // such; a refusal (cap, rate limit) is a failure with the reason (design §5).
+    const entry = await runStep(step, ctx, entryGates, {});
+    if (!entry.ok) {
+      await runStep(step, ctx, record, { outcome: "skipped", reason: entry.reason, kind: entry.kind }, "skip");
       return;
     }
 
-    try {
-      const rawProfile = await step.do("load-profile", async () => {
-        const db = createDb(env);
-        const { profile } = await getActiveProfile(db, userId);
-        return profile;
-      });
-      const profile = profileSchema.parse(rawProfile); // re-validate after step (de)serialization
-      const ctx = { userId, runId, profile };
+    // 2. load-profile — pins the profile version for the whole run
+    pinProfile(ctx, await runStep(step, ctx, loadProfile, {}));
 
-      // ── topic: discover+score (cron/manual) or targeted research (user) ────
-      let topic: CandidateRef | null;
-      if (userTopic) {
-        topic = await step.do("research", RETRY, async () =>
-          researchTopic(env, createDb(env), ctx, userTopic),
-        );
-      } else {
-        const candidates = await step.do("discover", RETRY, async () =>
-          findTopics(env, createDb(env), ctx),
-        );
-        await step.do("state-scoring", async () => setRunState(createDb(env), runId, "scoring"));
-        topic = await step.do("score", RETRY, async () =>
-          scoreAndSelect(env, createDb(env), ctx, candidates),
-        );
-      }
-      if (!topic) {
-        await step.do("record-no-topic", async () =>
-          setRunState(createDb(env), runId, "skipped", "no candidate scored ≥6 (FR-5.2)"),
-        );
-        return;
-      }
-      const picked = topic;
-
-      await step.do("state-drafting", async () => setRunState(createDb(env), runId, "drafting"));
-
-      // ── angles (FR-6.3): auto-pick for scheduled runs; requester picks for user runs ──
-      const angleResult = await step.do("angles", RETRY, async () => {
-        const db = createDb(env);
-        const result = await proposeAngles(env, db, ctx, picked);
-        // persisted so the app can render the picker (user runs) and change-angle (FR-7.9)
-        await setRunAngleProposals(db, runId, result);
-        return result;
-      });
-      let angleIndex = angleResult.recommendedIndex;
-      if (userTopic) {
-        angleIndex = await step
-          .waitForEvent<{ angleIndex: number }>("angle-choice", {
-            type: "angle-choice",
-            timeout: "24 hours",
-          })
-          .then((e) => e.payload.angleIndex)
-          .catch(() => angleResult.recommendedIndex); // timeout → auto-pick
-        angleIndex = Math.min(Math.max(angleIndex, 0), angleResult.angles.length - 1);
-      }
-      const angle = angleResult.angles[angleIndex]!;
-
-      // ── article (FR-6.3 step 2; guardrails + CANNOT_COMPLY hard-fail) ───────
-      const { article, provider, model } = await step.do("draft", RETRY, async () => {
-        try {
-          return await writeArticle(env, createDb(env), ctx, picked, angle);
-        } catch (e) {
-          if (e instanceof ComplianceRefusalError) throw new NonRetryableError(e.message);
-          throw e;
-        }
-      });
-
-      // ── text derivatives (FR-6.12/6.14) — skip-not-fail, per-kind outcomes (FR-15.13) ──
-      const derived = await step.do("derivatives", RETRY, async () =>
-        deriveTexts(env, createDb(env), ctx, article),
-      );
-
-      const draft = await step.do("save-draft", async () =>
-        createDraft(createDb(env), {
-          runId,
-          userId,
-          topicId: picked.id,
-          angle,
-          markdown: article.markdown,
-        }),
-      );
-
-      // ── reviewable Sanity draft: hero image + per-site mapping, all in-step (FR-6.13/8.1-8.3) ──
-      const sanity = await step.do("create-sanity-draft", RETRY, async () => {
-        const db = createDb(env);
-        const user = await db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userId) });
-        if (!user) throw new NonRetryableError(`user ${userId} not found`);
-        return createSanityDraft(env, db, {
-          user,
-          profile,
-          runId,
-          draftId: draft.id,
-          article,
-          texts: derived.texts,
-          sourceUrls: picked.sourceUrls,
-          provider,
-          model,
-        });
-      });
-
-      // ── DR-9.14: one row per derivative — the review screen renders each outcome ──
-      await step.do("record-derivatives", async () =>
-        recordDerivatives(createDb(env), draft.id, 0, [
-          ...derived.outcomes,
-          { kind: "hero_image", ...sanity.heroOutcome },
-        ]),
-      );
-
-      await step.do("notify", async () => {
-        console.log("pipeline: draft ready for review", { runId, sanityDocId: sanity.sanityDocId });
-        // FR-7.1: push → review draft in app. Best-effort — a push failure never fails the run.
-        await notifyUser(env, createDb(env), userId, {
-          title: "Draft ready for review",
-          body: article.title,
-          data: { draftId: draft.id, runId },
-        });
-      });
-
-      await step.do("state-pending", async () =>
-        setRunState(createDb(env), runId, "pending_approval"),
-      );
-
-      // ── approval loop (AR-10.5; FR-7.1/7.5/7.8/7.9): pause ≤7d, revise/change-angle ≤3× ──
-      let currentArticle = article;
-      let decision = await waitForApproval(step, 0);
-      for (let rev = 1; (decision.action === "revise" || decision.action === "change_angle") && rev <= 3; rev++) {
-        const priorMarkdown = currentArticle.markdown;
-        const instructions = decision.instructions ?? "";
-        const chosenAngleIndex = decision.angleIndex;
-        const isAngleChange = decision.action === "change_angle";
-
-        const revised = await step.do(`revise-${rev}`, RETRY, async () => {
-          const db = createDb(env);
-          await setDraftStatus(db, draft.id, "revising");
-          if (isAngleChange) {
-            const idx = Math.min(Math.max(chosenAngleIndex ?? 0, 0), angleResult.angles.length - 1);
-            return writeArticle(env, db, ctx, picked, angleResult.angles[idx]!);
-          }
-          await addDraftRevision(db, { draftId: draft.id, revisionNo: rev, instructions });
-          return writeArticle(env, db, ctx, picked, angle, {
-            currentMarkdown: priorMarkdown,
-            instructions,
-          });
-        });
-        currentArticle = revised.article;
-
-        const rederived = await step.do(`rederive-${rev}`, RETRY, async () =>
-          deriveTexts(env, createDb(env), ctx, revised.article),
-        );
-
-        const revisedSanity = await step.do(`update-sanity-${rev}`, RETRY, async () => {
-          const db = createDb(env);
-          const user = await getUserById(db, userId);
-          await updateDraftMarkdown(db, draft.id, revised.article.markdown);
-          const result = await createSanityDraft(env, db, {
-            user,
-            profile,
-            runId,
-            draftId: draft.id,
-            article: revised.article,
-            texts: rederived.texts,
-            sourceUrls: picked.sourceUrls,
-            provider: revised.provider,
-            model: revised.model,
-            existingImageAssetId: sanity.imageAssetId, // image kept unless instructions address it (FR-7.9)
-          });
-          await setDraftStatus(db, draft.id, "pending_approval");
-          return result;
-        });
-
-        // Revisions replace derivatives one revision at a time (DR-9.14, FR-7.9)
-        await step.do(`record-derivatives-${rev}`, async () =>
-          recordDerivatives(createDb(env), draft.id, rev, [
-            ...rederived.outcomes,
-            { kind: "hero_image", ...revisedSanity.heroOutcome },
-          ]),
-        );
-        await step.do(`notify-rev-${rev}`, async () => {
-          console.log("pipeline: revised draft ready", { runId, rev });
-          await notifyUser(env, createDb(env), userId, {
-            title: "Revised draft ready for review",
-            body: revised.article.title,
-            data: { draftId: draft.id, runId },
-          });
-        });
-        decision = await waitForApproval(step, rev);
-      }
-
-      // ── terminal decision ────────────────────────────────────────────────────
-      if (decision.action === "approve") {
-        if (decision.blogType) {
-          const chosenBlogType = decision.blogType;
-          await step.do("set-blog-type", async () =>
-            setDraftBlogType(createDb(env), draft.id, chosenBlogType),
-          );
-        }
-        const edited = decision.editedMarkdown;
-        if (edited && edited !== currentArticle.markdown) {
-          const before = currentArticle.markdown;
-          await step.do("apply-edits", RETRY, async () => {
-            const db = createDb(env);
-            await addEditDiff(db, { draftId: draft.id, userId, before, after: edited }); // FR-6.9
-            await updateDraftMarkdown(db, draft.id, edited);
-            const user = await getUserById(db, userId);
-            await patchDraftMarkdown(env, user, sanity.sanityDocId, edited);
-          });
-        }
-        if (decision.publishMode === "next_slot") {
-          await step.do("schedule-publish", async () => {
-            const db = createDb(env);
-            await scheduleDraft(db, draft.id, computeNextSlot(profile)); // hourly cron publishes (FR-7.5)
-            await setRunState(db, runId, "publishing");
-          });
-        } else {
-          await step.do("publish", RETRY, async () => {
-            const db = createDb(env);
-            const user = await getUserById(db, userId);
-            await publishApprovedDraft(env, db, { user, draftId: draft.id }); // production-only (FR-8.5)
-            await setRunState(db, runId, "published");
-          });
-        }
-      } else if (decision.action === "reject") {
-        const category = decision.rejectionCategory ?? "other";
-        await step.do("reject-cleanup", async () => {
-          const db = createDb(env);
-          const user = await getUserById(db, userId);
-          await deleteDraft(
-            env,
-            { projectId: user.sanityProjectId!, dataset: user.sanityDataset },
-            sanity.sanityDocId,
-          ); // FR-7.8: Sanity draft removed
-          await rejectDraft(db, draft.id, category);
-          await setRunState(db, runId, "rejected", `rejected: ${category}`);
-        });
-      } else {
-        await step.do("expire", async () => {
-          const db = createDb(env);
-          await expireDraft(db, draft.id); // Sanity draft stays for manual handling (design §5)
-          await setRunState(db, runId, "expired", "7-day approval timeout");
-        });
-      }
-    } catch (e) {
-      await step.do("record-failure", async () => {
-        const db = createDb(env);
-        const message = e instanceof Error ? e.message.slice(0, 500) : "unknown";
-        await setRunState(db, runId, "failed", message);
-        // design §9: "run failed" push, so a broken pipeline is noticed, not discovered
-        await notifyUser(env, db, userId, { title: "Pipeline run failed", body: message.slice(0, 200), data: { runId } });
-      });
-      throw e;
+    // 3. topic — discover + score, or targeted research for a user topic
+    const topic = ctx.userTopic
+      ? await runStep(step, ctx, research, { userTopic: ctx.userTopic })
+      : await runStep(step, ctx, score, { candidates: await runStep(step, ctx, discover, {}) });
+    if (!topic) {
+      await runStep(step, ctx, record, { outcome: "skipped", reason: "no candidate scored ≥6 (FR-5.2)", kind: "no_topic" }, "no-topic");
+      return;
     }
+
+    // 5. angles → angle gate
+    const proposals = await runStep(step, ctx, angles, { topic });
+    const angle = proposals.angles[await chooseAngle(step, ctx, proposals)]!;
+
+    // 7. draft
+    const drafted = await runStep(step, ctx, draft, { topic, angle });
+
+    // derivatives (v1 position — after approval once reordered)
+    const derived = await runStep(step, ctx, derivatives, { article: drafted.article });
+
+    // 9. save-draft
+    const { id: draftId } = await runStep(step, ctx, saveDraft, { topicId: topic.id, angle, markdown: drafted.article.markdown });
+
+    // hero image + Sanity draft (v1: one step) and the per-derivative rows
+    const sanity = await runStep(step, ctx, createSanityDraftStep, {
+      draftId,
+      article: drafted.article,
+      texts: derived.texts,
+      sourceUrls: topic.sourceUrls,
+      provider: drafted.provider,
+      model: drafted.model,
+      revised: false,
+    });
+    await runStep(step, ctx, recordDerivativesStep, {
+      draftId,
+      revisionNo: 0,
+      records: [...derived.outcomes, { kind: "hero_image", ...sanity.heroOutcome }],
+    });
+
+    // 13. notify → draft gate (with the revise / change_angle loop)
+    await runStep(step, ctx, notify, { draftId, title: drafted.article.title, revised: false });
+    const review = await reviewLoop(
+      step,
+      ctx,
+      { draftId, topic, angle, proposals, article: drafted.article, sanity },
+      await waitForDraftDecision(step, 0),
+    );
+
+    // terminal decision
+    switch (review.decision.action) {
+      case "approve":
+        await applyGate(step, ctx, draftGate, review.decision);
+        await runStep(step, ctx, publish, { draftId, publishMode: review.decision.publishMode ?? "now" });
+        return;
+      case "reject":
+        await runStep(step, ctx, record, {
+          outcome: "rejected",
+          draftId,
+          sanityDocId: review.sanity.sanityDocId,
+          category: review.decision.rejectionCategory ?? "other",
+        }, "reject");
+        return;
+      default:
+        await runStep(step, ctx, record, { outcome: "expired", draftId }, "expire");
+        return;
+    }
+  } catch (e) {
+    await runStep(step, ctx, record, { outcome: "failed", message: e instanceof Error ? e.message.slice(0, 500) : "unknown" }, "failure");
+    throw e;
   }
 }

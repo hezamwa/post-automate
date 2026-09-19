@@ -1,52 +1,30 @@
 // Bounded context: generation (AR-10.2) — angles, article, derivatives.
-// All AI calls go through the router (AR-10.9); guardrails live in the prompts.
+// All AI calls go through the router (AR-10.9); prompts live in workflows/prompts and
+// guardrails live inside them.
 import { and, desc, eq } from "drizzle-orm";
 import type { Language, Profile } from "@post-automate/shared";
 import { GateError } from "../../ai/gates";
+import { toChatRequest, type PromptSpec } from "../../ai/prompts/spec";
 import { NoRouteError, runImageTask, runTask } from "../../ai/router";
-import { schema } from "../../db/client";
-import { articleSystem } from "../../ai/prompts/blocks";
-import {
-  anglesPrompt,
-  anglesSchema,
-  articleSchema,
-  articleUser,
-  imagePrompt,
-  shortenLinkedInPrompt,
-  shortenXPrompt,
-  translatePrompt,
-  translateSchema,
-  type Angle,
-  type TopicBrief,
-  type TranslatedArticle,
-} from "../../ai/prompts/tasks";
-import type { Db } from "../../db/client";
+import { schema, type Db } from "../../db/client";
 import type { Env } from "../../shared/env";
+import { buildAnglesPrompt } from "../../workflows/prompts/angles";
+import { buildDeriveLinkedInPrompt, LINKEDIN_MAX_CHARS, type ShortenInput } from "../../workflows/prompts/derive-linkedin";
+import { buildDeriveXPrompt, X_MAX_CHARS } from "../../workflows/prompts/derive-x";
+import { buildDraftPrompt } from "../../workflows/prompts/draft";
+import { buildHeroImagePrompt } from "../../workflows/prompts/hero-image";
+import { buildTranslatePrompt } from "../../workflows/prompts/translate";
+import type { TopicBrief } from "../discovery/types";
+import type {
+  Angle,
+  AngleProposals,
+  Article,
+  ArticleResult,
+  DerivedTexts,
+  TextDerivativeOutcome,
+} from "./types";
 
-export interface Article {
-  title: string;
-  slug: string;
-  excerpt: string;
-  tags: string[];
-  imageAlt: string;
-  markdown: string;
-}
-
-export interface DerivedTexts {
-  xVersion?: string;
-  linkedinVersion?: string;
-  translatedMarkdown?: string;
-}
-
-/** One per-kind outcome row for DR-9.14 — recorded to draft_derivatives by the caller. */
-export interface TextDerivativeOutcome {
-  kind: "x" | "linkedin" | "translation";
-  outcome: "produced" | "skipped" | "failed";
-  content?: string;
-  reason?: string; // why skipped/failed — human-readable, surfaced on the review screen
-  /** Translation only: what the publish-time second document needs (design §8). */
-  meta?: { title: string; excerpt: string; imageAlt: string; targetLanguage: Language };
-}
+export type { Angle, AngleProposals, Article, ArticleResult, DerivedTexts, TextDerivativeOutcome } from "./types";
 
 export interface DeriveTextsResult {
   texts: DerivedTexts;
@@ -67,33 +45,16 @@ interface RunCtx {
 }
 
 /** FR-6.3 step 1: three angles + a recommended pick in one structured call. */
-export async function proposeAngles(
-  env: Env,
-  db: Db,
-  ctx: RunCtx,
-  topic: TopicBrief,
-): Promise<{ angles: Angle[]; recommendedIndex: number }> {
-  const prompt = anglesPrompt(ctx.profile, topic);
+export async function proposeAngles(env: Env, db: Db, ctx: RunCtx, topic: TopicBrief): Promise<AngleProposals> {
   const result = await runTask(env, db, {
     taskType: "angles",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: {
-      system: prompt.system,
-      messages: [{ role: "user", content: prompt.user }],
-      jsonSchema: anglesSchema as unknown as Record<string, unknown>,
-      maxTokens: 4000,
-    },
+    input: toChatRequest(buildAnglesPrompt({ profile: ctx.profile, topic })),
   });
-  const parsed = result.parsed as { angles: Angle[]; recommendedIndex: number };
+  const parsed = result.parsed as AngleProposals;
   const idx = Math.min(Math.max(parsed.recommendedIndex, 0), parsed.angles.length - 1);
   return { angles: parsed.angles, recommendedIndex: idx };
-}
-
-export interface ArticleResult {
-  article: Article;
-  provider: string; // → generationMeta (FR-8.2)
-  model: string;
 }
 
 /** FR-6.3 step 2: the article, plus slug/excerpt/tags/imageAlt in one structured call (FR-8.2 mapper inputs). */
@@ -105,20 +66,12 @@ export async function writeArticle(
   angle: Angle,
   revision?: { currentMarkdown: string; instructions: string },
 ): Promise<ArticleResult> {
-  const system = articleSystem(ctx.profile, /* approvedExamples: from Sanity later (FR-6.2) */ []);
-  const user = revision
-    ? `Here is the current draft:\n\n${revision.currentMarkdown}\n\nRevise it according to these instructions from the creator, keeping every editorial and compliance rule intact:\n"${revision.instructions}"\n\nReturn the full revised article with updated slug/excerpt/tags/imageAlt.`
-    : articleUser(topic, angle);
   const result = await runTask(env, db, {
     taskType: "article",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: {
-      system,
-      messages: [{ role: "user", content: user }],
-      jsonSchema: articleSchema as unknown as Record<string, unknown>,
-      maxTokens: 16000,
-    },
+    // approvedExamples: from Sanity later (FR-6.2)
+    input: toChatRequest(buildDraftPrompt({ profile: ctx.profile, topic, angle, approvedExamples: [], revision })),
   });
   const article = result.parsed as Article;
   if (article.markdown.trim().startsWith("CANNOT_COMPLY")) throw new ComplianceRefusalError();
@@ -146,13 +99,13 @@ export async function deriveTexts(env: Env, db: Db, ctx: RunCtx, article: Articl
   const outcomes: TextDerivativeOutcome[] = [];
 
   const channelTasks = [
-    { kind: "x" as const, taskType: "shorten_x" as const, prompt: shortenXPrompt(ctx.profile), maxChars: 280 },
-    { kind: "linkedin" as const, taskType: "shorten_linkedin" as const, prompt: shortenLinkedInPrompt(ctx.profile), maxChars: 3000 },
+    { kind: "x" as const, taskType: "shorten_x" as const, build: buildDeriveXPrompt, maxChars: X_MAX_CHARS },
+    { kind: "linkedin" as const, taskType: "shorten_linkedin" as const, build: buildDeriveLinkedInPrompt, maxChars: LINKEDIN_MAX_CHARS },
   ];
   for (const t of channelTasks) {
     if (!channels.includes(t.kind)) continue; // not asked for → absent, no row (design §5)
     try {
-      const content = await boundedShorten(env, db, ctx, t.taskType, t.prompt, article.markdown, t.maxChars);
+      const content = await boundedShorten(env, db, ctx, t.taskType, t.build, article.markdown, t.maxChars);
       if (t.kind === "x") texts.xVersion = content;
       else texts.linkedinVersion = content;
       outcomes.push({ kind: t.kind, outcome: "produced", content });
@@ -196,19 +149,13 @@ async function runTranslation(
   targetLanguage: Language,
 ): Promise<TextDerivativeOutcome> {
   try {
-    const prompt = translatePrompt(targetLanguage);
     const result = await runTask(env, db, {
       taskType: "translate",
       userId: ctx.userId,
       runId: ctx.runId,
-      input: {
-        system: prompt.system,
-        messages: [{ role: "user", content: prompt.user(source) }],
-        jsonSchema: translateSchema as unknown as Record<string, unknown>,
-        maxTokens: 16000,
-      },
+      input: toChatRequest(buildTranslatePrompt({ targetLanguage, source })),
     });
-    const parsed = result.parsed as TranslatedArticle;
+    const parsed = result.parsed as { title: string; excerpt: string; imageAlt: string; markdown: string };
     return {
       kind: "translation",
       outcome: "produced",
@@ -313,33 +260,21 @@ async function boundedShorten(
   db: Db,
   ctx: RunCtx,
   taskType: "shorten_x" | "shorten_linkedin",
-  system: string,
+  build: (input: ShortenInput) => PromptSpec,
   markdown: string,
   maxChars: number,
 ): Promise<string> {
-  const first = await runTask(env, db, {
-    taskType,
-    userId: ctx.userId,
-    runId: ctx.runId,
-    input: { system, messages: [{ role: "user", content: markdown }], maxTokens: 8000 },
-  });
-  let text = first.text.trim();
-  if (text.length > maxChars) {
-    const retry = await runTask(env, db, {
+  const call = (tooLong?: string) =>
+    runTask(env, db, {
       taskType,
       userId: ctx.userId,
       runId: ctx.runId,
-      input: {
-        system,
-        messages: [
-          { role: "user", content: markdown },
-          { role: "assistant", content: text },
-          { role: "user", content: `That is ${text.length} characters — the hard limit is ${maxChars}. Rewrite it shorter.` },
-        ],
-        maxTokens: 8000,
-      },
+      input: toChatRequest(build({ profile: ctx.profile, markdown, tooLong })),
     });
-    if (retry.text.trim().length < text.length) text = retry.text.trim();
+  let text = (await call()).text.trim();
+  if (text.length > maxChars) {
+    const retry = (await call(text)).text.trim();
+    if (retry.length < text.length) text = retry;
   }
   return text;
 }
@@ -356,7 +291,7 @@ export async function generateHeroImage(
     taskType: "image",
     userId: ctx.userId,
     runId: ctx.runId,
-    prompt: imagePrompt(article.title, ctx.profile),
+    prompt: buildHeroImagePrompt({ headline: article.title, profile: ctx.profile }),
     size: "1536x1024",
   });
   return { imageBase64: result.imageBase64, mimeType: result.mimeType, alt: article.imageAlt };

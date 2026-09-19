@@ -1,7 +1,7 @@
 // Per-site document mappers (FR-8.2, design §8): each site keeps its own blog type;
 // the pipeline satisfies each site's required fields. Adding a site = adding a mapper.
 import type { Profile } from "@post-automate/shared";
-import { PROMPT_VERSION } from "../../ai/prompts/blocks";
+import { PROMPT_VERSION } from "../../workflows/prompts/draft";
 import type { Article, DerivedTexts } from "../generation";
 import { markdownToPortableText } from "./portable-text";
 

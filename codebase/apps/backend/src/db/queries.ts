@@ -283,3 +283,8 @@ export async function routesUsingModel(db: Db, provider: string, model: string) 
     .from(schema.aiRoutes)
     .where(and(eq(schema.aiRoutes.provider, provider), eq(schema.aiRoutes.model, model)));
 }
+
+/** The run's draft (one per run) — how a gate finds what it is applying to. */
+export async function getDraftByRun(db: Db, runId: string) {
+  return db.query.drafts.findFirst({ where: eq(schema.drafts.runId, runId), orderBy: desc(schema.drafts.createdAt) });
+}

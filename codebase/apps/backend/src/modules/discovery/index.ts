@@ -1,24 +1,17 @@
 // Bounded context: discovery (AR-10.2) — LLM-with-search discovery, targeted research,
-// scoring. All AI calls go through the router (AR-10.9).
+// scoring. All AI calls go through the router (AR-10.9); prompts live in workflows/prompts.
 import { and, eq, gte } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
+import { toChatRequest } from "../../ai/prompts/spec";
 import { hasRouteFor, runSearch, runTask } from "../../ai/router";
-import {
-  candidatesSchema,
-  discoveryPrompt,
-  researchPrompt,
-  researchSchema,
-  type FetchedResult,
-  scoresSchema,
-  scoringPrompt,
-  type TopicBrief,
-} from "../../ai/prompts/tasks";
 import { schema, type Db } from "../../db/client";
 import type { Env } from "../../shared/env";
+import { buildResearchPrompt } from "../../workflows/prompts/research";
+import { buildScorePrompt } from "../../workflows/prompts/score";
+import { buildSynthesizeCandidatesPrompt } from "../../workflows/prompts/synthesize-candidates";
+import type { CandidateRef, FetchedResult, TopicBrief } from "./types";
 
-export interface CandidateRef extends TopicBrief {
-  id: string;
-}
+export type { CandidateRef, FetchedResult, TopicBrief } from "./types";
 
 interface RunCtx {
   userId: string;
@@ -99,22 +92,15 @@ async function fetchResults(env: Env, db: Db, ctx: RunCtx, query: string): Promi
 
 /** FR-5.4: LLM + web search returns candidates; all are persisted (DR-9.3). */
 export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<CandidateRef[]> {
-  const recent = await recentTopicTitles(db, ctx.userId);
+  const recentTopics = await recentTopicTitles(db, ctx.userId);
   const fetched = await fetchResults(env, db, ctx, `latest news and discussion in ${ctx.profile.domain.subNiches.join(", ")}`);
-  const prompt = discoveryPrompt(ctx.profile, recent, fetched);
   const result = await runTask(env, db, {
     taskType: "discovery",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: {
-      system: prompt.system,
-      messages: [{ role: "user", content: prompt.user }],
-      jsonSchema: candidatesSchema as unknown as Record<string, unknown>,
-      // The model only searches when nothing was fetched for it — never both, which would
-      // bill two searches for one brief.
-      webSearch: !fetched,
-      maxTokens: 16000,
-    },
+    // The model only searches when nothing was fetched for it — never both, which would
+    // bill two searches for one brief.
+    input: toChatRequest(buildSynthesizeCandidatesPrompt({ profile: ctx.profile, recentTopics, fetched }), { webSearch: !fetched }),
   });
   const { candidates } = result.parsed as { candidates: TopicBrief[] };
   const refs: CandidateRef[] = [];
@@ -142,17 +128,11 @@ export async function scoreAndSelect(
   ctx: RunCtx,
   candidates: CandidateRef[],
 ): Promise<CandidateRef | null> {
-  const prompt = scoringPrompt(ctx.profile, candidates);
   const result = await runTask(env, db, {
     taskType: "scoring",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: {
-      system: prompt.system,
-      messages: [{ role: "user", content: prompt.user }],
-      jsonSchema: scoresSchema as unknown as Record<string, unknown>,
-      maxTokens: 3000,
-    },
+    input: toChatRequest(buildScorePrompt({ profile: ctx.profile, candidates })),
   });
   const { scores } = result.parsed as {
     scores: Array<{ index: number; score: number; reason: string }>;
@@ -184,18 +164,11 @@ export async function researchTopic(
   userTopic: { title: string; notes?: string; links?: string[] },
 ): Promise<CandidateRef> {
   const fetched = await fetchResults(env, db, ctx, userTopic.title);
-  const prompt = researchPrompt(ctx.profile, userTopic, fetched);
   const result = await runTask(env, db, {
     taskType: "research",
     userId: ctx.userId,
     runId: ctx.runId,
-    input: {
-      system: prompt.system,
-      messages: [{ role: "user", content: prompt.user }],
-      jsonSchema: researchSchema as unknown as Record<string, unknown>,
-      webSearch: !fetched,
-      maxTokens: 16000,
-    },
+    input: toChatRequest(buildResearchPrompt({ profile: ctx.profile, topic: userTopic, fetched }), { webSearch: !fetched }),
   });
   const brief = result.parsed as TopicBrief & { keyFacts: string[] };
   const summary = `${brief.summary}\n\nKey facts:\n- ${brief.keyFacts.join("\n- ")}`;

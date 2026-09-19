@@ -1,9 +1,9 @@
 import type { Profile } from "@post-automate/shared";
+import type { FetchedResult } from "../../modules/discovery/types";
 
 // Composed prompt blocks (design §6, FR-6.1). Stable, profile-derived content first —
-// the volatile topic brief always goes in the user message, after these.
-
-export const PROMPT_VERSION = "v1";
+// the volatile topic brief always goes in the user message, after these. The builders
+// that assemble them live in src/workflows/prompts, one file per LLM call.
 
 // FR-3.7 (OD-3 revised): the generation language is profile.primaryLanguage, explicit
 // per user — never derived. Translation is a separate, opt-in task (FR-3.13, FR-6.14).
@@ -66,14 +66,16 @@ export function fewShotBlock(examples: string[]): string {
   return `EXAMPLES of the creator's writing — study the voice, do not copy content:\n${blocks}`;
 }
 
-export function articleSystem(profile: Profile, approvedExamples: string[]): string {
-  return [
-    editorialRules(profile),
-    voiceBlock(profile),
-    audienceBlock(profile),
-    guardrailsBlock(profile),
-    fewShotBlock(approvedExamples.length > 0 ? approvedExamples : profile.examplePosts),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+/** Recency guidance shared by discovery and research (design §6 discovery template). */
+export function recencyBlock(profile: Profile): string {
+  return profile.domain.field === "medical"
+    ? "Prioritize recency of RESEARCH — new studies, guideline updates, public-health advisories — over social-media buzz. Prefer primary sources (journals, WHO/CDC)."
+    : "Prioritize recency of discussion — launches, releases, debates — and cite where the discussion is happening.";
+}
+
+/** Fetched web results rendered for a chat model (two-step search, FR-5.4/5.8). */
+export function searchResultsBlock(results: FetchedResult[]): string {
+  return results
+    .map((r, i) => `[${i + 1}] ${r.title}${r.publishedDate ? ` (published ${r.publishedDate})` : ""}\n    ${r.url}\n    ${r.snippet}`)
+    .join("\n");
 }

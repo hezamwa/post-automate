@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 
@@ -8,6 +9,10 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 //  · "db"     — tests that need a real database. PGlite is genuine PostgreSQL compiled to
 //    WASM and needs Node APIs, so these run on the default pool. The code under test is
 //    plain TS + Drizzle; the Workers runtime would add startup cost and no coverage.
+//    Workflow tests (test/workflow) live here too: the pipeline runs against a fake
+//    WorkflowStep, with the `cloudflare:*` modules aliased to tiny stubs.
+const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}.ts`, import.meta.url));
+
 export default defineConfig({
   test: {
     projects: [
@@ -28,7 +33,13 @@ export default defineConfig({
         test: { name: "worker", include: ["src/**/*.test.ts"] },
       },
       {
-        test: { name: "db", include: ["test/db/**/*.test.ts"] },
+        resolve: {
+          alias: {
+            "cloudflare:workers": stub("cloudflare-workers"),
+            "cloudflare:workflows": stub("cloudflare-workflows"),
+          },
+        },
+        test: { name: "db", include: ["test/**/*.test.ts"] },
       },
     ],
   },
