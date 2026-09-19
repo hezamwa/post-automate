@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { assertAiAllowed, assertRunnable, GateError, SkipRunError } from "../../src/ai/gates";
 import { schema } from "../../src/db/client";
@@ -292,5 +293,23 @@ describe("assertRunnable — run-level gates", () => {
       expect((e as GateError).gate).toBe("user_cap");
     });
     expect.assertions(2);
+  });
+});
+
+describe("assertRunnable — scheduled runs and activity (spec §2, §3 step 1)", () => {
+  it("skips a scheduled run for a creator quiet for 7 days, but lets a manual run through", async () => {
+    const userId = await seedUser(db, { maxRunsPerDay: 10 });
+    await db.update(schema.users).set({ lastActiveAt: hoursAgo(8 * 24) }).where(eq(schema.users.id, userId));
+    const runId = await seedRun(db, userId);
+    await assertRunnable(db, userId, { runId, scheduled: true }).then(
+      () => {
+        throw new Error("expected a skip");
+      },
+      (e: unknown) => {
+        expect(e).toBeInstanceOf(SkipRunError);
+        expect((e as SkipRunError).kind).toBe("inactive");
+      },
+    );
+    await expect(assertRunnable(db, userId, { runId })).resolves.toBeDefined();
   });
 });

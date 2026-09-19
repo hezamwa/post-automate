@@ -1,5 +1,6 @@
 import { and, count, eq, gte, inArray, ne } from "drizzle-orm";
 import { schema, type Db } from "../db/client";
+import { isActive } from "../cron/activity";
 import { getFlags } from "../shared/flags";
 import { monthToDateUsd, recentCallCount } from "./meter";
 
@@ -27,8 +28,8 @@ export class GateError extends Error {
 export class SkipRunError extends Error {
   constructor(
     public reason: string,
-    /** pending_drafts skips send the FR-7.4 reminder push; a pause does not. */
-    public kind: "pending_drafts" | "runs_paused" = "pending_drafts",
+    /** pending_drafts skips send the FR-7.4 reminder push; a pause or inactivity does not. */
+    public kind: "pending_drafts" | "runs_paused" | "inactive" = "pending_drafts",
   ) {
     super(reason);
     this.name = "SkipRunError";
@@ -117,7 +118,7 @@ export async function assertAiAllowed(
 export async function assertRunnable(
   db: Db,
   userId: string,
-  opts: { runId: string; userRequested?: boolean },
+  opts: { runId: string; userRequested?: boolean; scheduled?: boolean },
 ): Promise<GateStatus> {
   // FR-15.12c: runs paused — no NEW run may start (user-requested included; nothing
   // bypasses this), while runs already under way continue undisturbed: assertAiAllowed
@@ -132,6 +133,15 @@ export async function assertRunnable(
   }
 
   const status = await assertAiAllowed(db, userId);
+
+  // Spec §3 step 1: a scheduled run for a creator who has gone quiet spends nothing —
+  // the dispatcher checks this too; here it also covers a run queued before they went quiet.
+  if (opts.scheduled) {
+    const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId), columns: { lastActiveAt: true, createdAt: true } });
+    if (user && !isActive(user)) {
+      throw new SkipRunError("Scheduled run skipped — no app activity in the last 7 days (spec §2)", "inactive");
+    }
+  }
 
   const limits = await db.query.userLimits.findFirst({
     where: eq(schema.userLimits.userId, userId),

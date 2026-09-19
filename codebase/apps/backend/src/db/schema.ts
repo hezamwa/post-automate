@@ -85,6 +85,8 @@ export const users = pgTable("users", {
   // Last authenticated app request or decision (spec §2): gates scheduled runs (7 days)
   // and silences reminders for someone who is clearly around.
   lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
+  // Spec §2: the "tap to get a draft" nudge after 7 days of silence, at most weekly.
+  lastNudgedAt: timestamp("last_nudged_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

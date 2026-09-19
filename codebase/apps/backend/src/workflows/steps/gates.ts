@@ -9,7 +9,7 @@ import { defineStep, RETRY } from "./step";
 
 export const entryOutcomeSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true) }),
-  z.object({ ok: z.literal(false), reason: z.string(), kind: z.enum(["pending_drafts", "runs_paused"]) }),
+  z.object({ ok: z.literal(false), reason: z.string(), kind: z.enum(["pending_drafts", "runs_paused", "inactive"]) }),
 ]);
 
 export const entryGates = defineStep({
@@ -19,8 +19,10 @@ export const entryGates = defineStep({
   retries: RETRY.io,
   nonRetryable: [GateError],
   run: async (ctx) => {
+    const db = createDb(ctx.env);
     try {
-      await assertRunnable(createDb(ctx.env), ctx.userId, { runId: ctx.runId, userRequested: !!ctx.userTopic });
+      const run = await db.query.pipelineRuns.findFirst({ where: (r, { eq }) => eq(r.id, ctx.runId), columns: { trigger: true } });
+      await assertRunnable(db, ctx.userId, { runId: ctx.runId, userRequested: !!ctx.userTopic, scheduled: run?.trigger === "cron" });
       return { ok: true as const };
     } catch (e) {
       if (e instanceof SkipRunError) return { ok: false as const, reason: e.reason, kind: e.kind };

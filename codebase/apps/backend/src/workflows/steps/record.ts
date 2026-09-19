@@ -11,7 +11,7 @@ import { defineStep, RETRY } from "./step";
 // runs are closed by `publish`.
 
 export const recordInputSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("skipped"), reason: z.string(), kind: z.enum(["pending_drafts", "runs_paused", "no_topic"]) }),
+  z.object({ outcome: z.literal("skipped"), reason: z.string(), kind: z.enum(["pending_drafts", "runs_paused", "inactive", "no_topic"]) }),
   z.object({ outcome: z.literal("failed"), message: z.string() }),
   z.object({
     outcome: z.literal("rejected"),
