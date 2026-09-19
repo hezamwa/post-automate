@@ -116,3 +116,40 @@ Checklist to complete it (≈15 minutes, non-destructive):
   explicit: `pnpm exec wrangler deploy --env production`. Still open: a dedicated Neon
   branch + Hyperdrive config (currently shared with staging — `wrangler.jsonc` TODO)
   and a tag-triggered CI job.
+
+---
+
+## 5. Staging database branch (design §14, article-workflow §2)
+
+Staging runs on its **own Neon branch** so they stop consuming production caps and writing
+production `spend_ledger` rows. The branch is a copy of production data as of the moment it
+was created or last refreshed — refresh it whenever staging should see current data.
+
+**Create or refresh** (laptop, needs a Neon API key — never a Worker secret):
+
+```sh
+cd codebase/apps/backend
+NEON_API_KEY=… NEON_PROJECT_ID=… pnpm tsx scripts/neon-staging-branch.ts
+```
+
+The script creates the `staging` branch from the primary branch, or resets an existing one
+to the primary's current state, and prints the branch's direct connection URI plus the two
+follow-up commands:
+
+1. `DATABASE_URL="<uri>" pnpm db:migrate` — bring the branch to the newest migrations.
+2. `wrangler hyperdrive create post-automate-staging --connection-string="<uri>"` — once;
+   then put the returned id in `wrangler.jsonc` → `env.staging.hyperdrive[0].id` and deploy
+   staging. A refresh keeps the same Hyperdrive config (same branch id, same URI).
+
+**Status:** the script and the wrangler note are in place; the branch and the Hyperdrive
+config still have to be created from an account with Neon and Cloudflare access. Until the
+id in `wrangler.jsonc` changes, staging shares production's database.
+
+**After a refresh:** staging drafts and runs created before the refresh are gone (the branch
+was reset). Re-seed test users with `pnpm db:seed` if needed. Sanity is unaffected — staging
+still writes `drafts.*` into the real projects and never publishes (FR-8.5).
+
+**Cron:** only production owns schedules. Since v2 the daily job launches runs only for
+creators with `autoRun` on who were active in the last 7 days; everything else it does
+(transcript purge, draft reminders on day 6 then weekly, the 7-day silence nudge, the
+auto-publish warning and publish) is free.

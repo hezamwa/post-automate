@@ -322,3 +322,61 @@ export async function gateChoicesForRun(db: Db, runId: string) {
 export async function sourcesForRun(db: Db, runId: string) {
   return db.select().from(schema.sources).where(eq(schema.sources.runId, runId)).orderBy(asc(schema.sources.fetchedAt));
 }
+
+const RUN_OUTCOMES = ["published", "rejected", "abandoned", "skipped", "failed"] as const;
+
+/**
+ * GET /admin/budget breakdown (spec §8): month-to-date spend by task type, by model (with
+ * cached tokens), and by run outcome — non-run spend (canaries, per-draft overrides) is
+ * its own bucket — plus cost per published article, with everything that did not publish
+ * attributed to the ones that did. One call answers "what did an article cost this month".
+ */
+export async function budgetBreakdown(db: Db) {
+  const since = monthStartUtc();
+  const inMonth = gte(schema.spendLedger.createdAt, since);
+  const byTaskType = await db
+    .select({ taskType: schema.spendLedger.taskType, usd: spentUsd, calls: count() })
+    .from(schema.spendLedger)
+    .where(inMonth)
+    .groupBy(schema.spendLedger.taskType);
+  const byModel = await db
+    .select({
+      provider: schema.spendLedger.provider,
+      model: schema.spendLedger.model,
+      usd: spentUsd,
+      calls: count(),
+      cacheReadTokens: sql<string>`coalesce(sum(${schema.spendLedger.cacheReadTokens}), 0)`,
+      cacheWriteTokens: sql<string>`coalesce(sum(${schema.spendLedger.cacheWriteTokens}), 0)`,
+    })
+    .from(schema.spendLedger)
+    .where(inMonth)
+    .groupBy(schema.spendLedger.provider, schema.spendLedger.model);
+  const byState = await db
+    .select({ state: schema.pipelineRuns.state, usd: spentUsd })
+    .from(schema.spendLedger)
+    .leftJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, schema.spendLedger.runId))
+    .where(inMonth)
+    .groupBy(schema.pipelineRuns.state);
+  const [published] = await db
+    .select({ n: count() })
+    .from(schema.pipelineRuns)
+    .where(and(eq(schema.pipelineRuns.state, "published"), gte(schema.pipelineRuns.finishedAt, since)));
+
+  const outcome = (state: string | null) => (state == null ? "unattributed" : (RUN_OUTCOMES as readonly string[]).includes(state) ? state : "in_progress");
+  const byRunOutcome: Record<string, number> = Object.fromEntries([...RUN_OUTCOMES, "in_progress", "unattributed"].map((k) => [k, 0]));
+  for (const row of byState) byRunOutcome[outcome(row.state)] = (byRunOutcome[outcome(row.state)] ?? 0) + Number(row.usd);
+  const totalUsd = Object.values(byRunOutcome).reduce((a, b) => a + b, 0);
+  const publishedArticles = published?.n ?? 0;
+  const perArticle = (usd: number) => (publishedArticles > 0 ? Number((usd / publishedArticles).toFixed(4)) : null);
+
+  return {
+    byTaskType: byTaskType.map((r) => ({ taskType: r.taskType, usd: Number(r.usd), calls: r.calls })),
+    byModel: byModel.map((r) => ({ provider: r.provider, model: r.model, usd: Number(r.usd), calls: r.calls, cacheReadTokens: Number(r.cacheReadTokens), cacheWriteTokens: Number(r.cacheWriteTokens) })),
+    byRunOutcome,
+    publishedArticles,
+    /** all month-to-date spend ÷ published articles — rejected, abandoned, skipped and failed runs included */
+    costPerPublishedArticleUsd: perArticle(totalUsd),
+    /** only the spend of the runs that published — what an article costs when nothing goes wrong */
+    directCostPerPublishedArticleUsd: perArticle(byRunOutcome.published ?? 0),
+  };
+}

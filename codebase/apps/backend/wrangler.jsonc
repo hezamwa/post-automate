@@ -24,12 +24,16 @@
       "workflows": [
         { "name": "pipeline-staging", "binding": "PIPELINE", "class_name": "PipelineWorkflow" }
       ],
+      // STAGING MUST POINT AT ITS OWN NEON BRANCH (article-workflow §2, design §14): run
+      // scripts/neon-staging-branch.ts, create a Hyperdrive config for the printed uri, and
+      // replace this id — runbook §5. Until then this is the production config: staging runs
+      // consume production caps and write production spend_ledger rows.
       "hyperdrive": [{ "binding": "DB", "id": "27ca81d3c2bd45dcb76eafc2917bb0ab" }],
       // NFR-16.3: uncomment once R2 is enabled on the account and the bucket exists
       // (`wrangler r2 bucket create post-automate-backups`) — see docs/runbook.md
       // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "post-automate-backups" }],
-      // No crons on staging since production went live (2026-08-22): both envs share the
-      // DB, and two dispatchers would double-launch runs. Staging is triggered manually.
+      // No crons on staging: only production owns schedules (FR-8.5, article-workflow §2).
+      // Staging is triggered manually.
       "triggers": { "crons": [] }
     },
     "production": {

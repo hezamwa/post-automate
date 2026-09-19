@@ -20,6 +20,7 @@ import {
 import { getActiveProfile } from "../modules/profiles";
 import { hasMedicalGuardrails } from "../modules/profiles/medical";
 import {
+  budgetBreakdown,
   latestHealthByRoute,
   listModels,
   listRoutes,
@@ -142,7 +143,8 @@ export const admin = new Hono<AuthedEnv>()
     });
   })
 
-  // FR-15.10: view the global hard cap with consumption + a linear month-end projection
+  // FR-15.10: the global hard cap with consumption + a linear month-end projection, and the
+  // spec §8 breakdown — by task type, by model, by run outcome, cost per published article.
   .get("/budget", async (c) => {
     const db = createDb(c.env);
     const capUsd = (await getFlags(db))["global_monthly_cap_usd"];
@@ -152,6 +154,7 @@ export const admin = new Hono<AuthedEnv>()
       spentUsd: Number(spentUsd.toFixed(4)),
       percentUsed: Number(((spentUsd / capUsd) * 100).toFixed(1)),
       projectedMonthEndUsd: Number(projectMonthEndUsd(spentUsd, new Date()).toFixed(2)),
+      breakdown: await budgetBreakdown(db),
     });
   })
   // Raising a cap deserves a trail too (DR-9.13) — the write goes through the flag store.

@@ -4,8 +4,9 @@ How one article is made under the revised pipeline: who starts a run, where the 
 decides, what each step spends, and what reaches Sanity. The state machine of record is
 [design.md §5](design.md); this is the operator's and newcomer's view of it.
 
-Steps marked **new** or **changed** do not exist in the code yet. Everything else links to the
-current implementation.
+Every step and gate below links to its file. The layout (one file per step, one per gate,
+the order in `pipeline.ts`) is described in the workflows
+[README](../codebase/apps/backend/src/workflows/README.md).
 
 Everything below happens inside **one durable Workflow instance per run**
 ([`PipelineWorkflow`](../codebase/apps/backend/src/workflows/pipeline.ts)). The instance stays
@@ -95,9 +96,9 @@ All three create one `pipeline_runs` row and one Workflow instance keyed to it.
 
 | Trigger | Entry point | Notes |
 |---|---|---|
-| **Generate** (primary) | [`POST /runs/trigger`](../codebase/apps/backend/src/api/runs.ts#L79) | the home-screen button. Refused while `runs.paused` (FR-15.12c). If the user already has an undecided draft, the app opens that draft instead of starting a run |
-| User topic | [`POST /runs/request`](../codebase/apps/backend/src/api/runs.ts#L101) | banned-topic collision → 409 until resubmitted with `overrideBannedTopics: true`; 30-day dedup similarity warns but never blocks (FR-7.7) |
-| Scheduled (opt-in) | cron `0 6 * * *` → [`dailyDispatch`](../codebase/apps/backend/src/index.ts#L41) **changed** | launches only for users with `profile.autoRun = true` *and* `last_active_at` within 7 days *and* today in `cadence.preferredDays`. Everyone else gets nothing — no run, no spend |
+| **Generate** (primary) | [`POST /runs/trigger`](../codebase/apps/backend/src/api/runs.ts) | the home-screen button. Refused while `runs.paused` (FR-15.12c). If the user already has an undecided draft, the app opens that draft instead of starting a run |
+| User topic | [`POST /runs/request`](../codebase/apps/backend/src/api/runs.ts) | banned-topic collision → 409 until resubmitted with `overrideBannedTopics: true`; 30-day dedup similarity warns but never blocks (FR-7.7) |
+| Scheduled (opt-in) | cron `0 6 * * *` → [`dailyDispatch`](../codebase/apps/backend/src/cron/dispatch.ts) | launches only for users with `profile.autoRun = true` *and* `last_active_at` within 7 days *and* today in `cadence.preferredDays`. Everyone else gets nothing — no run, no spend |
 
 The principle: **the only money spent is money a user asked to spend.** Cron keeps running
 only free jobs — the hourly publisher, route health, gate and draft reminders, a nudge push
@@ -113,30 +114,34 @@ branch so staging runs stop consuming production caps and polluting `spend_ledge
 Every row is a `step.do` — durable, idempotent, `runId`-scoped, and holding **at most one
 billable call**, so a retry never re-bills a call that already succeeded. The **AI** column marks
 the provider each step bills; the **Gate** column marks where the run may pause for the user.
+Each step name links to its file under
+[`src/workflows/steps/`](../codebase/apps/backend/src/workflows/steps/); the order lives in
+[`pipeline.ts`](../codebase/apps/backend/src/workflows/pipeline.ts) and the folder's
+[README](../codebase/apps/backend/src/workflows/README.md).
 
 | # | Step | What it does | AI | Gate after |
 |---|---|---|---|---|
-| 1 | [`gates`](../codebase/apps/backend/src/workflows/pipeline.ts#L87) **changed** | budget caps (global + per-user), rate limit, `ai.paused`, suspension, **no undecided draft** (was: fewer than 2), and for scheduled runs the activity check | — | — |
-| 2 | [`load-profile`](../codebase/apps/backend/src/workflows/pipeline.ts#L113) | pins the **active profile version** for the whole run, including its `gates` settings | — | — |
-| 3a | `search` **new** (split from `discover`) | snippet-only search on the profile's interests — titles and summaries, never full pages. Cheapest call in the run | search | — |
-| 3b | `synthesize-candidates` **new** (split from `discover`) | turns the snippets into 8–10 candidate topics: title, why it's trending, source links. All persist to `topic_candidates` (DR-9.3) | Haiku | — |
-| 3c | [`score`](../codebase/apps/backend/src/workflows/pipeline.ts#L132) | scores every candidate against the profile with rejection reasons; keeps those ≥ 6. Nothing qualifies → run ends `skipped` | Haiku | **topic** |
-| 3d | [`research`](../codebase/apps/backend/src/workflows/pipeline.ts#L124) | *user-topic runs only* — replaces 3a–3c and the topic gate: targeted search plus the user's links → a brief with cited sources | search + Haiku | — |
-| 4 | `fetch-sources` **new** | full-content fetch for the **chosen topic only** — the article's grounding. One deep fetch instead of ten shallow ones | search | — |
-| 5 | [`angles`](../codebase/apps/backend/src/workflows/pipeline.ts#L147) **changed** | proposes 3 angles and a recommendation, stored on the run | Sonnet (A/B Haiku) | **angle** |
-| 6 | `outline` **new** | section headings with 1–2 key points each for the chosen angle. Ten seconds to review, prevents most whole-article revisions | Haiku | **outline** |
-| 7 | [`draft`](../codebase/apps/backend/src/workflows/pipeline.ts#L168) **changed** | writes the article from the composed prompt (editorial rules + voice + audience + guardrails + few-shot approved posts + the approved outline). `CANNOT_COMPLY` is non-retryable — a decision, not a failure. Prompt uses a `cache_control` breakpoint after the stable prefix | Sonnet | — |
-| 8 | `quality-check` **new** | checks the finished article: disclaimer present (medical profiles), no diagnosis/dosage language, correct language, within length, banned topics absent, not similar to the last 30 days, outline honoured. **Fail → one automatic revise** with the findings, then proceed regardless; findings are shown on the review screen | Haiku | — |
-| 9 | [`save-draft`](../codebase/apps/backend/src/workflows/pipeline.ts#L182) | the `drafts` row — markdown lives here, the app's editing source of truth until publish (DR-9.11) | — | — |
-| 10 | `image-concepts` **new** | 2–3 hero-image concepts as short text descriptions. The image is *not* generated yet | Haiku | **image** |
-| 11 | `hero-image` **new** (split from `create-sanity-draft`) | generates the chosen concept at the route's pinned `quality`, uploads to Sanity assets, returns **only the asset reference**. Image bytes never leave this step | image | — |
-| 12 | `write-sanity-draft` **changed** (rest of `create-sanity-draft`) | markdown → Portable Text, per-site mapper, writes `drafts.draft-{runId}` with the asset reference — deterministic id, so a retry cannot duplicate | — | — |
-| 13 | [`notify`](../codebase/apps/backend/src/workflows/pipeline.ts#L218) | FCM "draft ready". Best-effort: a failed push never fails the run | — | **draft**, then **derivatives** |
-| 14 | `derive-x` **new** (split from `derivatives`, moved after approval) | X version ≤ 280 chars, from the **final approved markdown**. Runs only if the user ticked X at the derivatives gate | Haiku | — |
-| 15 | `derive-linkedin` **new** (same) | LinkedIn version, same rule | Haiku | — |
-| 16 | `translate` **new** (same) | Arabic (or the profile's target language) edition, from the final approved markdown, only if ticked. Generated once — it can no longer drift from an edited article | Sonnet | **publish** |
-| 17 | [`publish`](../codebase/apps/backend/src/modules/publishing/index.ts#L131) | `publishApprovedDraft` — see §6 | — | — |
-| 18 | `record` | closes the run; the approved post becomes a few-shot candidate; every gate choice is stored as a preference signal for profile refinement | — | — |
+| 1 | [`gates`](../codebase/apps/backend/src/workflows/steps/gates.ts) | budget caps (global + per-user), rate limit, `ai.paused`, suspension, **no undecided draft** (was: fewer than 2), and for scheduled runs the activity check | — | — |
+| 2 | [`load-profile`](../codebase/apps/backend/src/workflows/steps/load-profile.ts) | pins the **active profile version** for the whole run, including its `gates` settings | — | — |
+| 3a | [`search`](../codebase/apps/backend/src/workflows/steps/search.ts) | snippet-only search on the profile's interests — titles and summaries, never full pages. Cheapest call in the run | search | — |
+| 3b | [`synthesize-candidates`](../codebase/apps/backend/src/workflows/steps/synthesize-candidates.ts) | turns the snippets into 8–10 candidate topics: title, why it's trending, source links. All persist to `topic_candidates` (DR-9.3) | Haiku | — |
+| 3c | [`score`](../codebase/apps/backend/src/workflows/steps/score.ts) | scores every candidate against the profile with rejection reasons; keeps those ≥ 6. Nothing qualifies → run ends `skipped` | Haiku | **topic** |
+| 3d | [`research`](../codebase/apps/backend/src/workflows/steps/research.ts) | *user-topic runs only* — replaces 3b–3c and the topic gate: the `search` snippets plus the user's links → a brief with cited sources (the search is step 3a, its own call) | Haiku | — |
+| 4 | [`fetch-sources`](../codebase/apps/backend/src/workflows/steps/fetch-sources.ts) | full-content fetch for the **chosen topic only** — the article's grounding. One deep fetch instead of ten shallow ones | search | — |
+| 5 | [`angles`](../codebase/apps/backend/src/workflows/steps/angles.ts) | proposes 3 angles and a recommendation, stored on the run | Sonnet (A/B Haiku) | **angle** |
+| 6 | [`outline`](../codebase/apps/backend/src/workflows/steps/outline.ts) | section headings with 1–2 key points each for the chosen angle. Ten seconds to review, prevents most whole-article revisions | Haiku | **outline** |
+| 7 | [`draft`](../codebase/apps/backend/src/workflows/steps/draft.ts) | writes the article from the composed prompt (editorial rules + voice + audience + guardrails + few-shot approved posts + the approved outline). `CANNOT_COMPLY` is non-retryable — a decision, not a failure. Prompt uses a `cache_control` breakpoint after the stable prefix | Sonnet | — |
+| 8 | [`quality-check`](../codebase/apps/backend/src/workflows/steps/quality-check.ts) | checks the finished article: disclaimer present (medical profiles), no diagnosis/dosage language, correct language, within length, banned topics absent, not similar to the last 30 days, outline honoured. **Fail → one automatic revise** with the findings, then proceed regardless; findings are shown on the review screen | Haiku | — |
+| 9 | [`save-draft`](../codebase/apps/backend/src/workflows/steps/save-draft.ts) | the `drafts` row — markdown lives here, the app's editing source of truth until publish (DR-9.11) | — | — |
+| 10 | [`image-concepts`](../codebase/apps/backend/src/workflows/steps/image-concepts.ts) | 2–3 hero-image concepts as short text descriptions. The image is *not* generated yet | Haiku | **image** |
+| 11 | [`hero-image`](../codebase/apps/backend/src/workflows/steps/hero-image.ts) | generates the chosen concept at the route's pinned `quality`, uploads to Sanity assets, returns **only the asset reference**. Image bytes never leave this step | image | — |
+| 12 | [`write-sanity-draft`](../codebase/apps/backend/src/workflows/steps/write-sanity-draft.ts) | markdown → Portable Text, per-site mapper, writes `drafts.draft-{runId}` with the asset reference — deterministic id, so a retry cannot duplicate | — | — |
+| 13 | [`notify`](../codebase/apps/backend/src/workflows/steps/notify.ts) | FCM "draft ready". Best-effort: a failed push never fails the run | — | **draft**, then **derivatives** |
+| 14 | [`derive-x`](../codebase/apps/backend/src/workflows/steps/derive-x.ts) | X version ≤ 280 chars, from the **final approved markdown**. Runs only if the user ticked X at the derivatives gate | Haiku | — |
+| 15 | [`derive-linkedin`](../codebase/apps/backend/src/workflows/steps/derive-linkedin.ts) | LinkedIn version, same rule | Haiku | — |
+| 16 | [`translate`](../codebase/apps/backend/src/workflows/steps/translate.ts) | Arabic (or the profile's target language) edition, from the final approved markdown, only if ticked. Generated once — it can no longer drift from an edited article | Sonnet | **publish** |
+| 17 | [`publish`](../codebase/apps/backend/src/workflows/steps/publish.ts) | `publishApprovedDraft` — see §6 | — | — |
+| 18 | [`record`](../codebase/apps/backend/src/workflows/steps/record.ts) | closes the run; the approved post becomes a few-shot candidate; every gate choice is stored as a preference signal for profile refinement | — | — |
 
 Per-site mapping matters at steps 12 and 17: field names differ by project
 (`body`/`publishDate` for `5gz3ngjs`, `content`/`datePublished` elsewhere), and Afnan's site
@@ -197,6 +202,10 @@ too.
 
 ### 4.2 How a gate resolves
 
+Implemented once, in [`gates/gate.ts`](../codebase/apps/backend/src/workflows/gates/gate.ts)
+(`resolveGate`) with the wait chain in [`gates/wait.ts`](../codebase/apps/backend/src/workflows/gates/wait.ts).
+Workflows event types cannot contain `:`, so the events are `gate-<name>`.
+
 ```mermaid
 flowchart LR
     S["step emits options"] --> C{"gate setting"}
@@ -219,13 +228,13 @@ is two app sessions and one notification: tap, choose, choose, accept the outlin
 
 | Gate | After step | Options | Free text becomes |
 |---|---|---|---|
-| **topic** | `score` | the scored candidates, best first, with score and reason | a user-topic `research` step |
-| **angle** | `angles` | the 3 proposals + recommendation | a fourth angle |
-| **outline** | `outline` | one outline — approve, edit sections, or request another | instructions for a regenerated outline |
-| **image** | `image-concepts` | 2–3 concepts, or "no hero image" | a custom concept |
-| **draft** | `notify` | approve / revise / change_angle / reject (§5) | — |
-| **derivatives** | approve | tick X · LinkedIn · Arabic edition, any subset or none (multi-select, on the approve screen) | — |
-| **publish** | `translate` | now / next slot / hold, with the produced derivative texts shown | edits to a derivative text |
+| [**topic**](../codebase/apps/backend/src/workflows/gates/topic.ts) | `score` | the scored candidates, best first, with score and reason | a user-topic `research` step |
+| [**angle**](../codebase/apps/backend/src/workflows/gates/angle.ts) | `angles` | the 3 proposals + recommendation | a fourth angle |
+| [**outline**](../codebase/apps/backend/src/workflows/gates/outline.ts) | `outline` | one outline — approve, edit sections, or request another | instructions for a regenerated outline |
+| [**image**](../codebase/apps/backend/src/workflows/gates/image.ts) | `image-concepts` | 2–3 concepts, or "no hero image" | a custom concept |
+| [**draft**](../codebase/apps/backend/src/workflows/gates/draft.ts) | `notify` | approve / revise / change_angle / reject (§5) | — |
+| [**derivatives**](../codebase/apps/backend/src/workflows/gates/derivatives.ts) | approve | tick X · LinkedIn · Arabic edition, any subset or none (multi-select, on the approve screen) | — |
+| [**publish**](../codebase/apps/backend/src/workflows/gates/publish.ts) | `translate` | now / next slot / hold, with the produced derivative texts shown | edits to a derivative text (`edits: { x?, linkedin? }` on the answer) |
 
 Every choice is written to the run row (it must be, to resume the workflow) and copied to the
 preference log — which topics this creator picks, which angles, what they edit in outlines.
@@ -236,8 +245,9 @@ That is a better signal for profile refinement than edit diffs, and it is free.
 ## 5. The draft gate
 
 State → `pending_approval`, and the workflow parks on `waitForEvent`.
-[`POST /drafts/:id/decision`](../codebase/apps/backend/src/api/drafts.ts#L39) delivers the
-verdict to the live instance, with a direct-handling fallback if the instance is gone.
+[`POST /drafts/:id/decision`](../codebase/apps/backend/src/api/drafts.ts) delivers the
+verdict to the live instance, with a direct-handling fallback
+([`workflows/direct.ts`](../codebase/apps/backend/src/workflows/direct.ts)) if the instance is gone.
 
 ```mermaid
 stateDiagram-v2
@@ -294,7 +304,7 @@ next slot — only if **all** of the following hold, enforced in the API regardl
 ## 6. Publish
 
 Three paths, one function. `publishApprovedDraft` is the single choke point shared by the
-publish gate (now), the hourly cron [`hourlyPublish`](../codebase/apps/backend/src/index.ts#L92)
+publish gate (now), the hourly cron [`hourlyPublish`](../codebase/apps/backend/src/cron/publish.ts)
 (next slot) and the direct-handling path (stale drafts). In order it: refuses if
 `publishing.paused` (scheduling is still allowed — the publisher simply holds), stamps the date
 field and `blogType`, publishes the draft document, sets the row to `published` and **purges the
@@ -305,7 +315,7 @@ primary.
 Publishing only ever happens in the production Worker (FR-8.5).
 
 Afterwards: the run closes as `published`, the approved post becomes a few-shot candidate for
-future generations, and [`POST /drafts/:id/retract`](../codebase/apps/backend/src/api/drafts.ts#L175)
+future generations, and [`POST /drafts/:id/retract`](../codebase/apps/backend/src/api/drafts.ts)
 can unpublish both the post and its translated edition.
 
 ---
@@ -362,7 +372,8 @@ outcome so that **cost per published article** is one query.
 - **Feedback loop not closed.** Edit diffs and gate choices are stored, but `writeArticle` still
   passes `approvedExamples: []` (FR-6.2). Until that is wired, "tuned by what you edit" is
   aspirational.
-- **Undocumented route.** [`GET /drafts/:id`](../codebase/apps/backend/src/api/drafts.ts#L31)
-  carries the review screen but is missing from design.md §7's route table.
-- **Cached-input pricing.** `ModelInfo` has no cached-input price; once `cache_control` is set,
-  the ledger over-counts until it does.
+- **Staging branch.** The Neon branch and its Hyperdrive config still have to be created
+  from an account with access — [runbook §5](runbook.md#5-staging-database-branch-design-14-article-workflow-2)
+  has the two-command procedure; until then staging shares production's database.
+- *(Closed 2026-09-20: `GET /drafts/:id` is in design.md §7; cached-input prices are in the
+  registry and metered — unpriced cached tokens bill at the input price, never less.)*

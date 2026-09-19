@@ -224,6 +224,26 @@ app_config_audit   id PK · key · old_value jsonb nullable · new_value jsonb
                    -- well as the switches — raising a cap deserves a trail too  (DR-9.13)
 ```
 
+**Added with the v2 workflow (2026-09-20; migrations 0012–0019):**
+
+```
+profiles.payload     · gates {topic,angle,outline,image,derivatives,publish: ask|auto}
+                     · autoRun bool  (workflow §4.1, §2 — payload fields, shape v2 unchanged)
+users                · last_active_at · last_nudged_at  (workflow §2; auto_publish moved to user_limits)
+user_limits          · auto_publish bool default false  (workflow §5.2 — admin-only, audited)
+pipeline_runs        · gate · chosen_topic_id · chosen_angle_index · outline jsonb
+                     · image_concepts jsonb · chosen_image_concept · state += abandoned
+topic_candidates     · why_it_matters
+drafts               · channels jsonb · stale bool · seen_at · quality_check jsonb
+                     · auto_publish_warned_at · auto_publish_held_at
+draft_derivatives    · outcome += declined
+gate_choices         id · run_id · user_id · gate · options_shown jsonb · choice jsonb
+                     · free_text · source (user|auto) · chosen_at   (workflow §4.3 preference log)
+sources              id · run_id · url · title · content · fetched_at   UNIQUE(run_id, url)
+spend_ledger         · cache_read_tokens · cache_write_tokens
+ai_models            · cached_input_per_mtok_usd · cache_write_per_mtok_usd
+```
+
 **Retention job**: the daily dispatcher also deletes `onboarding_sessions` rows past `purge_after` (OD-7).
 
 ---
@@ -396,120 +416,98 @@ by task code.
 
 ### State machine (persisted in `pipeline_runs.state`, DR-9.4)
 
+*Revised 2026-09-20 for the v2 article workflow — [article-workflow.md](article-workflow.md)
+is the operator's view; this is the machine.*
+
 ```
-                 ┌──────────┐    no viable topic     ┌────────┐
-  cron/manual ──▶│discovering│──────────────────────▶│ skipped │
-                 └────┬─────┘                        └────────┘
-                      ▼
-                 ┌─────────┐      ┌──────────┐      ┌──────────────────┐
-                 │ scoring │─────▶│ drafting │─────▶│ pending_approval │
-                 └─────────┘      └──────────┘      └───┬────┬────┬────┘
-                                                approve │    │    │ timeout (7d)
-                                                        ▼    │    ▼
-                                                 ┌──────────┐│ ┌─────────┐
-                                                 │publishing││ │ expired │
-                                                 └────┬─────┘│ └─────────┘
-                                                      ▼      ▼ reject
-                                                 ┌─────────┐ ┌──────────┐
-                                                 │published │ │ rejected │
-                                                 └─────────┘ └──────────┘
+   Generate · /runs/request · cron (autoRun, active ≤ 7 d)
+                       │
+                       ▼
+                 ┌───────────┐  gates: cap / rate limit → failed ·
+                 │discovering│  undecided draft / runs.paused / inactive → skipped
+                 └─────┬─────┘
+                       ▼ candidates persisted
+                 ┌─────────┐   nothing ≥ 6 ──▶ skipped
+                 │ scoring │   gate: topic (ask|auto)        30 d unanswered ──▶ abandoned
+                 └────┬────┘
+                      ▼ topic chosen · sources fetched
+                 ┌──────────┐  gates: angle · outline · image (ask|auto; 30 d ──▶ abandoned)
+                 │ drafting │  draft → quality-check (fail → one automatic revise)
+                 └────┬─────┘
+                      ▼ Sanity draft written · push
+              ┌──────────────────┐ ◀── revise / change_angle (≤ 3, live instance) ──┐
+              │ pending_approval │ ◀── hold (publish gate)                           │
+              │  no expiry;      │──── reject ──────────────────────────▶ rejected    │
+              │  stale flag when │                                                    │
+              │  the instance    │                                                    │
+              │  times out       │                                                    │
+              └────────┬─────────┘                                                    │
+                       │ approve (+ edits, blogType, channels, publishMode)           │
+                       ▼                                                              │
+                 ┌────────────┐ derivatives (ticked kinds only) → gate: publish        │
+                 │ publishing │──── next_slot ──▶ draft scheduled → hourly publisher ──┼──▶ published
+                 └────────────┘──── now ──────────────────────────────────────────────┘
         any step, retries exhausted ──▶ failed
 ```
 
 | Transition | Trigger | Side effects |
 |---|---|---|
-| `→ discovering` | Cron dispatcher or manual endpoint | `pipeline_runs` row created with active profile version |
-| `discovering → scoring` | Discovery step returns candidates | Candidates persisted (DR-9.3) |
-| `scoring → drafting` | Top candidate above threshold selected | Rejection reasons written for the rest |
-| `scoring → skipped` | No candidate above threshold | Run ends; nothing published |
-| `→ skipped` (at gates) | ≥2 drafts pending review (FR-7.4) or `runs.paused` (§10.1) — deliberate, non-error conditions | Reason recorded; FR-7.4 skips send the reminder push (a pause does not) |
-| `→ failed` (at gates) | A cap or rate limit refused the run (§10) — *amended 2026-08-21: caps report as `failed` with the human-readable reason, not `skipped`; budget exhaustion is an abnormal condition an admin should see in failure rates* | Error recorded; budget alerts pushed at 80%/100% crossings |
-| `drafting → pending_approval` | Article **and its applicable derivatives** created; Sanity `drafts.*` doc written with all assets. Which derivatives apply is per-profile: channel versions from `profile.channels` (FR-3.12), translation only when `profile.translation.enabled` (FR-3.13) | `drafts` row + FCM push (FR-7.1); one approval covers article + image + channel texts + translation |
-| `pending_approval → publishing` | User approves (or edits + approves) | Edit diff stored if edited (FR-6.9) |
-| `pending_approval → rejected` | User rejects, choosing a category: quality / changed-mind / other (FR-7.8) | Category stored (quality feeds refinement; changed-mind doesn't); Sanity draft deleted; markdown purged; topic still counts toward 30-day dedup |
-| `pending_approval → revising → pending_approval` | User requests revision with free-text instructions, max 3 per draft (FR-7.9) | Article regenerated on the same route (guardrails intact); X version + translation re-derived (image kept unless instructions mention it); Sanity draft updated; instructions stored (DR-9.12); new push |
-| `scheduled → pending_approval` | User cancels a scheduled publish before `publish_at` (FR-7.8) | Publish unscheduled; draft reviewable again |
-| `pending_approval → expired` | 7-day `waitForEvent` timeout | Draft stays in Sanity for manual handling |
-| `publishing → published` | Sanity publish mutation succeeds; webhook confirms (FR-8.6) | Run closed; approved post becomes few-shot candidate (FR-6.2) |
-| `any → failed` | Step retries exhausted | Error recorded; visible in app |
+| `→ discovering` | Generate button, user-topic request, or the daily dispatcher (only for `profile.autoRun` creators active in the last 7 days with today in their preferred days and no undecided draft) | `pipeline_runs` row with the active profile version; one Workflow instance |
+| `→ skipped` (at gates) | An undecided draft already exists (FR-7.4 — **one** since v2, every trigger), `runs.paused` (§10.1), or a scheduled run for a creator quiet for 7 days | Reason recorded; the pending-draft skip sends a reminder push |
+| `→ failed` (at gates) | A cap or rate limit refused the run (§10) | Error recorded and pushed; budget alerts at 80%/100% |
+| `discovering → scoring` | `search` (snippets, one call) + `synthesize-candidates` | Candidates persisted with `why_it_matters` (DR-9.3) |
+| `scoring → skipped` | No candidate ≥ 6 | Run ends before the topic gate |
+| `scoring → drafting` | The **topic gate** resolved: the recommendation (auto), a pick, or free text (→ `search` + `research` as a user-topic run) | `chosen_topic_id`, `gate_choices` row; `fetch-sources` persists the chosen topic's pages once |
+| `→ abandoned` | A pre-draft gate (topic, angle, outline, image) unanswered for 30 days: 2 min silent → push → 3 d → reminder → 27 d | State + reason recorded; spend so far stays attributed to the run. **Never auto-proceeds** |
+| `drafting → pending_approval` | angles → **angle gate** → outline → **outline gate** → draft → quality-check (fail → one auto-revise, then proceed with the findings) → save-draft → image-concepts → **image gate** → hero-image → write-sanity-draft → notify | `drafts` row with `quality_check`; `drafts.postauto-{runId}` written; FCM push. Derivatives are **not** produced here |
+| `pending_approval → pending_approval` | Reminder on day 6, then weekly — there is no expiry | Push only |
+| stale flag | The instance's wait (365 days) runs out | `drafts.stale = true`; markdown and Sanity draft kept; approve/reject go through direct handling, revise/change_angle are refused (409) |
+| `pending_approval → revising → pending_approval` | revise (instructions) re-enters at `draft`; change_angle re-enters at `outline` from another stored angle (outline gate applies). Max 3 per draft, shared across hold cycles | Quality re-checked; Sanity draft rewritten, hero image kept; new push |
+| `pending_approval → publishing` | approve (+ `editedMarkdown`, `blogType`, `channels`, `publishMode`) | Edit diff stored (FR-6.9); the **derivatives gate** (on the approve payload, no pause) sets `drafts.channels`; then `derive-x` → `derive-linkedin` → `translate` from the **final** markdown — ticked kinds run, unticked get a `declined` row, unsupported none |
+| `publishing → published` | **publish gate** = now (or auto with `publishMode: now`) → `publishApprovedDraft` | Markdown purged (DR-9.11); translated edition best-effort after the primary |
+| `publishing → (scheduled)` | publish gate = next_slot | `drafts.status = scheduled`, `publish_at`; the hourly publisher completes `→ published` |
+| `publishing → pending_approval` | publish gate = hold | Back to the queue and the draft gate; a later approve reuses the derivatives unless the text was edited |
+| `pending_approval → rejected` | reject with a category (FR-7.8) | Sanity draft deleted; markdown purged; topic still counts for the 30-day dedup |
+| auto-publish (§5.2 of the workflow doc) | `user_limits.auto_publish` (admin-only, audited, never for a medical profile) and a draft pending 7 days: warning push on day 6 with a Hold, then approve with the profile's channels → next slot | Only when quality-check passed without a revise and the creator opened the draft |
+| `any → failed` | Step retries exhausted | Error recorded and pushed |
 
-Note: `auto_publish=true` users (tech user, later — OD-4) skip the wait: `pending_approval` resolves immediately to `publishing`. The medical user can never take this path (FR-7.2).
+`expired` (draft and run) is **legacy**: the v1 7-day timeout. Nothing writes it since v2; the
+enum values stay only because historic rows carry them.
 
-**Derivative failure policy (FR-15.13).** A missing or unroutable derivative must not throw away a
-good article — the `derivatives` step degrades instead of failing the run:
+**Derivative outcome policy (FR-15.13, spec §7).** Each derivative is its own step and its own
+`draft_derivatives` row; one failing never re-bills another.
 
-| Case | Behaviour |
+| Case | Row |
 |---|---|
-| Optional derivative (hero image, channel version) has no enabled route | Skip, record on the run, continue |
-| Translation **not requested** (`translation.enabled = false`) | Not attempted — not a skip, simply out of scope for this profile |
-| Translation **requested** but no enabled route / call fails | Draft still goes to review, translation marked `failed` with the reason shown on the review screen |
-| Article generation has no enabled route | Fail the run, naming the task type — there is no draft without it |
-
-The distinction that matters: a derivative the user never asked for is absent, while one they did
-ask for is *missing*, and the review screen has to say which.
-
-*(Clarified 2026-08-21: skip-not-fail covers **routes and provider failures only**. A gate
-refusal mid-derivatives — `ai.paused`, a cap, suspension — propagates and halts the step
-rather than recording `failed` rows: FR-15.12a's "halting in-flight runs" outranks degrading.)*
+| Kind not supported by the profile (channel absent, translation off) | none — absent, not skipped |
+| Supported but unticked at the derivatives gate | `declined` — no call made |
+| Ticked, but the task has no enabled route | `skipped`, with the reason |
+| Ticked, attempted, failed | `failed`, with the reason; the article publishes alone |
+| A gate refusal (`ai.paused`, a cap, suspension) mid-derivatives | propagates and halts the step — a deliberate stop outranks degrading |
 
 ### Workflow implementation (AR-10.3, AR-10.5)
 
-```ts
-export class PipelineWorkflow extends WorkflowEntrypoint<Env, { userId: string; runId: string }> {
-  async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
-    const profile = await step.do("load-profile", () =>
-      profiles.getActive(event.payload.userId));                    // pins profile_version
+`src/workflows/pipeline.ts` is orchestration only — the ordered sequence of steps and gates
+from the workflow doc's §1, top to bottom. One file per step under `steps/` (contract:
+`steps/step.ts` — zod in, zod out, re-validated after Workflows deserialisation, at most
+**one billable call** per `step.do`, per-step non-retryable errors such as `CANNOT_COMPLY`),
+one per gate under `gates/` (contract: `gates/gate.ts` — `resolveGate` implements the
+ask/auto/abandon rule once), the loops under `loops/`, one prompt builder per LLM call under
+`prompts/` (each with its own `PROMPT_VERSION`, recorded in `generationMeta`). The folder's
+README lists the order. `workflows/direct.ts` runs the same step definitions inline for a
+draft whose instance is gone (approve → derivatives → publish, or reject).
 
-    await step.do("gates", () =>
-      gates.assertRunnable(event.payload.userId));                  // caps — global + per-user (§10) —
-                                                                    // and <2 drafts pending (FR-7.4)
+Invariants: deterministic external ids (`drafts.postauto-{runId}`, one `draft_derivatives`
+row per draft × kind × revision) so a retry never duplicates; emergency flags re-read on
+every step (fresh `Db` per step — §10.1); step outputs are ids and references, never bytes
+(`hero-image` uploads and returns only the asset reference); the article prompt sets a
+`cache_control` breakpoint after its stable prefix and cached tokens are metered at their
+own prices.
 
-    const candidates = await step.do("discover", { retries: { limit: 2, backoff: "exponential" } },
-      () => discovery.findTopics(profile));                         // FR-5.4, LLM + web search
-
-    const topic = await step.do("score", () =>
-      discovery.scoreAndSelect(candidates, profile));               // FR-5.2; persists all (DR-9.3)
-    if (!topic) return this.finish("skipped");
-
-    const angle = await step.do("angles", () =>
-      generation.proposeAndPickAngle(topic, profile));              // FR-6.3 call #1
-
-    const draft = await step.do("draft", () =>
-      generation.writeArticle(topic, angle, profile));              // FR-6.3 call #2, guardrails
-
-    const assets = await step.do("derivatives", () =>
-      generation.deriveAssets(draft, profile));                     // FR-6.12–6.14: hero image,
-                                                                    // X.com version, translation
-    const sanityId = await step.do("create-sanity-draft", () =>
-      publishing.createDraft(draft, assets, profile));              // FR-8.1..8.3
-
-    await step.do("notify", () => notify.draftReady(event.payload.userId, sanityId));
-
-    // AR-10.5: pause until the user acts (or auto-publish resolves it); revisions loop ≤3× (FR-7.9)
-    let decision = await waitForApproval(step);                    // 7-day timeout → expired
-    for (let i = 1; decision.payload.action === "revise" && i <= 3; i++) {
-      await step.do(`revise-${i}`, () =>
-        generation.revise(event.payload.runId, decision.payload.instructions));
-      await step.do(`notify-rev-${i}`, () => notify.draftReady(event.payload.userId, sanityId));
-      decision = await waitForApproval(step);
-    }
-
-    if (decision.payload.action === "approve") {
-      if (decision.payload.publishMode === "now")
-        await step.do("publish", () => publishing.publish(sanityId));
-      else
-        await step.do("schedule-publish", () =>
-          drafts.scheduleAtNextSlot(event.payload.runId));          // hourly cron publishes (FR-7.5)
-    }
-    await step.do("record", () => runs.close(event.payload.runId, decision.payload.action));
-  }
-}
-```
-
-- **User-requested runs** (FR-5.8, `trigger = user_topic`): the same workflow with `payload.userTopic` set. The `discover` and `score` steps are replaced by one `research` step — `discovery.researchTopic(userTopic, profile)`: targeted web search plus fetching the user's provided links → a topic brief with cited sources. The `gates` step skips the pending-drafts check but enforces all caps (FR-7.7). After `angles`, the workflow pauses on `step.waitForEvent("angle-choice", { timeout: "24 hours" })` so the requester picks one of the 3 proposals in the app; on timeout it auto-picks like a scheduled run (FR-6.3).
-- **Idempotency** (AR-10.3): every step writes with `runId`-scoped upserts; `create-sanity-draft` uses a deterministic Sanity document ID (`draft-{runId}`) so a retried step can't create duplicates.
-- The decision API route sends the event: `env.PIPELINE.get(instanceId).sendEvent({ type: "approval", payload: { action, editedMarkdown?, publishMode?, instructions?, angleIndex?, rejectionCategory? } })` — `action` ∈ approve / reject / revise / change_angle. An approval with `next_slot` puts the draft in `scheduled`; the hourly publisher cron publishes every draft whose `publish_at` has arrived. Rejection deletes the Sanity draft and purges the markdown (FR-7.8); `change_angle` regenerates from one of the run's other stored angle proposals.
-- LLM calls are `await fetch` inside steps — I/O wait, no CPU budget concern.
+Tests drive `runPipeline` end to end against a fake `WorkflowStep` (scripted events, retries,
+serialisable outputs, per-attempt billing) on PGlite, with the router, Sanity client and FCM
+faked at their boundaries; the one-call invariant is asserted on every scenario and proven to
+flag a violator (`test/workflow/`).
 
 ---
 
@@ -768,23 +766,26 @@ version** (never mutate, FR-3.10).
 | `/onboarding/confirm` | POST | Persist confirmed profile as new version (FR-4.3) |
 | `/profile` | GET/PATCH | Read active profile; PATCH creates a new version (FR-3.11 form edits) |
 | `/drafts` | GET | Pending + historical drafts queue, each with its latest-revision derivative outcomes (DR-9.14). Bodies stay in Sanity (DR-9.6) |
-| `/drafts/:id` | GET | Review-screen detail (added 2026-08-21): the markdown — the app's editing source of truth until publish (DR-9.11) — latest derivatives, run state + stored angle proposals, and the `medical` / `supportsBlogType` gating flags |
-| `/drafts/:id/decision` | POST | `{action: approve\|reject\|revise\|change_angle, editedMarkdown?, publishMode?, instructions?, angleIndex?, rejectionCategory?, blogType?}` → sends Workflow event; stores diff/instructions; `blogType` is Afnan's per-draft public/em choice (§8) (FR-6.9, FR-7.5, FR-7.8–7.9) |
+| `/drafts/:id` | GET | Review-screen detail: the markdown (the app's editing source of truth until publish, DR-9.11), latest derivatives, `qualityCheck` findings, `stale` / `seenAt` / `channels`, run state + stored angle proposals + outline, the `medical` / `supportsBlogType` flags, the **derivatives gate** (`gates.derivatives`: setting, options, preselected) and publish setting, and the read-only `autoPublish` flag. The owner's first open sets `seen_at` |
+| `/drafts/:id/decision` | POST | `{action: approve\|reject\|revise\|change_angle, editedMarkdown?, publishMode?, channels?, instructions?, angleIndex?, rejectionCategory?, blogType?}` — whole payload validated (400). Live instance → Workflow event. Stale draft: revise/change_angle → 409 with the reason; approve/reject → direct handling (derivatives → publish). `channels` is the derivatives gate; `blogType` Afnan's per-draft choice (§8) (FR-6.9, FR-7.5, FR-7.8–7.9) |
+| `/drafts/:id/hold` | POST | The publish gate's **hold** when the run is waiting there (back to the queue), or the auto-publish warning's Hold (`auto_publish_held_at`); 409 when neither applies |
 | `/drafts/:id/cancel-schedule` | POST | Cancel a scheduled publish before `publish_at`; draft returns to pending review (FR-7.8) |
 | `/drafts/:id/retract` | POST | Urgent unpublish of a published post (FR-7.6); edits stay in Studio |
 | `/drafts/:id/derivatives/translation` | POST/DELETE | Per-draft translation override (FR-6.14): POST `{targetLanguage}` requests one for a draft whose profile has translation off; DELETE drops one the profile produced. Runs standalone against the `translate` route — it does **not** re-enter the Workflow, since the article is already final and only the derivative changes. Writes a `draft_derivatives` row (DR-9.14). Refused once the draft is published. *(Semantics fixed 2026-08-21: an unroutable/failing translation returns 200 with the recorded `failed` row and its reason — an outcome, not a transport error; gate refusals return 503.)* |
 | `/runs` | GET | Pipeline run history + states (debugging/metrics) |
-| `/runs/trigger` | POST | Manual pipeline run — discovery picks the topic. *(Narrowed 2026-08-21: no longer accepts a topic; `/runs/request` is the only entry for user topics, so the FR-7.7 warn-and-override flow cannot be bypassed)* |
+| `/runs/trigger` | POST | The **Generate** button — discovery picks the topic. **409 `{ error, existingDraftId }`** while the user has an undecided draft (the app opens it instead); 503 while `runs.paused`. *(No topic here: `/runs/request` is the only entry for user topics, so the FR-7.7 warn-and-override flow cannot be bypassed)* |
+| `/runs/:id` | GET | One payload to render any gate: `run` (state, `gate`, chosen topic/angle, outline, image concepts…), `gate` (the waiting gate's name and options, or null), `choices` (every gate choice so far) |
+| `/runs/:id/gates/:gate` | POST | Answer the gate the run is waiting on — `{ optionId }`, `{ freeText }`, edited `{ sections }` (outline) or `{ optionId, edits }` (publish); validated against the gate's choice schema (400); 409 unless the run is waiting on that gate. Gates: topic, angle, outline, image, publish |
 | `/runs/request` | POST | User-requested topic run: `{title, notes?, links[]?, overrideBannedTopics?}`; response carries dedup/banned-topic warnings (FR-5.8, FR-7.7) |
-| `/runs/:id/angle` | POST | `{angleIndex}` → sends the `angle-choice` Workflow event for user-requested runs (FR-6.3) |
+| `/runs/:id/angle` | POST | *Deprecated alias* for `/runs/:id/gates/angle` (`{angleIndex}` → `{ optionId }`) kept for the shipped app |
 | `/webhooks/sanity` | POST | Publish confirmations + Studio-edit capture; HMAC-verified (FR-8.6) |
 | `/metrics` | GET | Topics surfaced, approval rate, edit distance, per-user spend (FR-15.7) |
 | `/admin/ai/routes` | GET/POST/PATCH | Routing config CRUD — global defaults + per-user overrides (FR-15.3) |
 | `/admin/ai/routes/:id/test` | POST | Canary-test a route now; returns + stores the human-readable result (FR-15.5) |
 | `/admin/ai/health` | GET | Latest status per route + check history (FR-15.5) |
-| `/admin/users/:id/limits` | GET/PATCH | Per-user caps: monthly $, runs/day, req/min (FR-15.8) |
+| `/admin/users/:id/limits` | GET/PATCH | Per-user caps: monthly $, runs/day, req/min (FR-15.8) — and `autoPublish` (workflow §5.2): admin-writable only, every change audited in `app_config_audit` (`user_limits.auto_publish:<userId>`), **409 for any profile with medical guardrails**, whoever asks (FR-7.2) |
 | `/admin/monitor` | GET | Global dashboard: spend by user/provider/task/day, cap status, route health, run stats (FR-15.11) |
-| `/admin/budget` | GET/PATCH | View/raise the global hard cap; shows % consumed and projected month-end (FR-15.10) |
+| `/admin/budget` | GET/PATCH | View/raise the global hard cap; % consumed, projected month-end (FR-15.10), and `breakdown`: by task type, by model (with cached tokens), by run outcome (published / rejected / abandoned / skipped / failed / in progress / unattributed), `publishedArticles`, `costPerPublishedArticleUsd` (all spend ÷ published) and `directCostPerPublishedArticleUsd` |
 | `/admin/users` | GET/POST | List users; create a user — data, not code (FR-2.5) |
 | `/admin/users/:id` | DELETE | Offboard a user: cascade-delete personal records, anonymize spend ledger, unassign Sanity authorship (FR-2.6) |
 | `/admin/users/:id/suspend` | POST/DELETE | Suspend / reactivate a user; POST body `{reason}` (FR-2.7) |
