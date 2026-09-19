@@ -48,17 +48,41 @@ export const candidatesSchema = {
   additionalProperties: false,
 } as const;
 
-export function discoveryPrompt(profile: Profile, recentTopics: string[]): { system: string; user: string } {
+/** Search results fetched by the web_search route, injected instead of the model searching. */
+export interface FetchedResult {
+  title: string;
+  url: string;
+  snippet: string;
+  publishedDate?: string;
+}
+
+function resultsBlock(results: FetchedResult[]): string {
+  return results
+    .map((r, i) => `[${i + 1}] ${r.title}${r.publishedDate ? ` (published ${r.publishedDate})` : ""}\n    ${r.url}\n    ${r.snippet}`)
+    .join("\n");
+}
+
+export function discoveryPrompt(
+  profile: Profile,
+  recentTopics: string[],
+  fetched?: FetchedResult[],
+): { system: string; user: string } {
   const recency =
     profile.domain.field === "medical"
       ? "Prioritize recency of RESEARCH — new studies, guideline updates, public-health advisories — over social-media buzz. Prefer primary sources (journals, WHO/CDC)."
       : "Prioritize recency of discussion — launches, releases, debates — and cite where the discussion is happening.";
   return {
     system: `You are a topic scout for a ${profile.domain.field} content creator. ${recency}
-Search the web before answering; every candidate must cite at least one real source URL.
+${
+      fetched
+        ? "Web search results are provided below — work only from them and do not invent sources; every candidate must cite at least one URL that appears there."
+        : "Search the web before answering; every candidate must cite at least one real source URL."
+    }
 Exclude anything matching these banned topics: ${profile.topicPolicy.bannedTopics.join("; ") || "(none)"}.
 Also exclude topics similar to these, covered or rejected in the last 30 days: ${recentTopics.join("; ") || "(none)"}.`,
-    user: `Find 8-10 topics currently trending in: ${profile.domain.subNiches.join(", ")}. Return them as structured candidates.`,
+    user: `Find 8-10 topics currently trending in: ${profile.domain.subNiches.join(", ")}. Return them as structured candidates.${
+      fetched ? `\n\nSearch results:\n${resultsBlock(fetched)}` : ""
+    }`,
   };
 }
 
@@ -80,10 +104,17 @@ export const researchSchema = {
 export function researchPrompt(
   profile: Profile,
   topic: { title: string; notes?: string; links?: string[] },
+  fetched?: FetchedResult[],
 ): { system: string; user: string } {
   return {
-    system: `You research one specific topic for a ${profile.domain.field} content creator. The creator chose it — do not judge whether it is trending. Search the web; treat the creator's provided links as primary sources. Every key fact must tie to a source URL.`,
-    user: `Topic: "${topic.title}"\nCreator notes: ${topic.notes ?? "(none)"}\nProvided sources: ${topic.links?.join(", ") ?? "(none)"}\nReturn a structured topic brief.`,
+    system: `You research one specific topic for a ${profile.domain.field} content creator. The creator chose it — do not judge whether it is trending. ${
+      fetched
+        ? "Web search results are provided below — work only from them and the creator's links, and do not invent sources."
+        : "Search the web; treat the creator's provided links as primary sources."
+    } Every key fact must tie to a source URL.`,
+    user: `Topic: "${topic.title}"\nCreator notes: ${topic.notes ?? "(none)"}\nProvided sources: ${topic.links?.join(", ") ?? "(none)"}\nReturn a structured topic brief.${
+      fetched ? `\n\nSearch results:\n${resultsBlock(fetched)}` : ""
+    }`,
   };
 }
 

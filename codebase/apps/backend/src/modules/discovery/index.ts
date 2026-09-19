@@ -2,12 +2,13 @@
 // scoring. All AI calls go through the router (AR-10.9).
 import { and, eq, gte } from "drizzle-orm";
 import type { Profile } from "@post-automate/shared";
-import { runTask } from "../../ai/router";
+import { hasRouteFor, runSearch, runTask } from "../../ai/router";
 import {
   candidatesSchema,
   discoveryPrompt,
   researchPrompt,
   researchSchema,
+  type FetchedResult,
   scoresSchema,
   scoringPrompt,
   type TopicBrief,
@@ -73,10 +74,34 @@ export async function checkTopicRequest(
   return { bannedCollisions, similarRecentTopics };
 }
 
+/**
+ * Fetch real results when a 'web_search' route is configured, so the chat model synthesises
+ * from them instead of searching for itself (FR-5.4). No route = the LLM-native path,
+ * unchanged. A search that fails is not fatal: falling back to LLM-native search produces a
+ * worse brief, never no brief.
+ */
+async function fetchResults(env: Env, db: Db, ctx: RunCtx, query: string): Promise<FetchedResult[] | undefined> {
+  if (!(await hasRouteFor(db, "web_search", ctx.userId))) return undefined;
+  try {
+    const { results } = await runSearch(env, db, {
+      userId: ctx.userId,
+      runId: ctx.runId,
+      query,
+      count: 10,
+      freshness: "week",
+    });
+    return results.length > 0 ? results : undefined;
+  } catch (e) {
+    console.log("discovery: web_search route failed, falling back to LLM-native search", e instanceof Error ? e.message : e);
+    return undefined;
+  }
+}
+
 /** FR-5.4: LLM + web search returns candidates; all are persisted (DR-9.3). */
 export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<CandidateRef[]> {
   const recent = await recentTopicTitles(db, ctx.userId);
-  const prompt = discoveryPrompt(ctx.profile, recent);
+  const fetched = await fetchResults(env, db, ctx, `latest news and discussion in ${ctx.profile.domain.subNiches.join(", ")}`);
+  const prompt = discoveryPrompt(ctx.profile, recent, fetched);
   const result = await runTask(env, db, {
     taskType: "discovery",
     userId: ctx.userId,
@@ -85,7 +110,9 @@ export async function findTopics(env: Env, db: Db, ctx: RunCtx): Promise<Candida
       system: prompt.system,
       messages: [{ role: "user", content: prompt.user }],
       jsonSchema: candidatesSchema as unknown as Record<string, unknown>,
-      webSearch: true,
+      // The model only searches when nothing was fetched for it — never both, which would
+      // bill two searches for one brief.
+      webSearch: !fetched,
       maxTokens: 16000,
     },
   });
@@ -156,7 +183,8 @@ export async function researchTopic(
   ctx: RunCtx,
   userTopic: { title: string; notes?: string; links?: string[] },
 ): Promise<CandidateRef> {
-  const prompt = researchPrompt(ctx.profile, userTopic);
+  const fetched = await fetchResults(env, db, ctx, userTopic.title);
+  const prompt = researchPrompt(ctx.profile, userTopic, fetched);
   const result = await runTask(env, db, {
     taskType: "research",
     userId: ctx.userId,
@@ -165,7 +193,7 @@ export async function researchTopic(
       system: prompt.system,
       messages: [{ role: "user", content: prompt.user }],
       jsonSchema: researchSchema as unknown as Record<string, unknown>,
-      webSearch: true,
+      webSearch: !fetched,
       maxTokens: 16000,
     },
   });

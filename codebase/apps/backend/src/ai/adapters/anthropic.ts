@@ -6,6 +6,7 @@ import type {
   ChatResult,
   HealthResult,
   ProviderAdapter,
+  ProviderModel,
   Usage,
 } from "../types";
 
@@ -91,7 +92,20 @@ export function createAnthropicAdapter(env: Env): ProviderAdapter {
     }
   }
 
-  return { id: "anthropic", capabilities: ["chat", "search"], chat, healthCheck, classifyError };
+  async function listModels(): Promise<ProviderModel[]> {
+    // NOTE: the API's per-model `capabilities` object describes FEATURES (batch, citations,
+    // effort, context management) — not our chat/image sense. Anthropic's catalogue is chat
+    // models throughout, so that is stated rather than parsed out of a mismatched field.
+    const page = await client.models.list({ limit: 100 });
+    return page.data.map((m) => ({
+      id: m.id,
+      displayName: (m as { display_name?: string }).display_name,
+      capability: "chat" as const,
+      guessed: false,
+    }));
+  }
+
+  return { id: "anthropic", capabilities: ["chat", "search"], chat, healthCheck, listModels, classifyError };
 }
 
 function accumulateUsage(usage: Usage, response: Anthropic.Message): void {

@@ -35,6 +35,7 @@ import { desc, eq } from "drizzle-orm";
 import type { ProviderId } from "@post-automate/shared";
 import { getAdapter } from "./adapters";
 import { schema, type Db } from "../db/client";
+import { listModels } from "../db/queries";
 import type { Env } from "../shared/env";
 
 export interface RouteTestResult {
@@ -63,7 +64,10 @@ export async function testRoute(env: Env, db: Db, routeId: string): Promise<Rout
   if (!route) return null;
 
   const adapter = getAdapter(route.provider as ProviderId, env);
-  const result = await adapter.healthCheck(route.model);
+  // The registry says what the model is, so the canary probes it the right way (FR-15.5);
+  // an unregistered model still gets a chat ping and fails honestly.
+  const registered = (await listModels(db)).find((m) => m.provider === route.provider && m.model === route.model);
+  const result = await adapter.healthCheck(route.model, registered?.capability);
   // Success carries the latency (design §6.3: "OK — model responded in 812 ms");
   // failures get the remediation catalogue's message with the raw detail appended.
   const message =

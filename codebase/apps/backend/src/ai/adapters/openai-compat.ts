@@ -1,11 +1,11 @@
-import type { HealthStatus, ProviderId } from "@post-automate/shared";
-import { MODEL_REGISTRY } from "../registry";
+import type { Capability, HealthStatus, ProviderId } from "@post-automate/shared";
 import type { Env } from "../../shared/env";
 import type {
   ChatRequest,
   ChatResult,
   HealthResult,
   ProviderAdapter,
+  ProviderModel,
   Usage,
 } from "../types";
 
@@ -31,7 +31,45 @@ type CompatProvider = keyof typeof CONFIG;
 interface CompletionResponse {
   choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
-  error?: { message?: string; code?: string; type?: string };
+  error?: { message?: string; code?: string; type?: string } | string;
+  code?: string;
+}
+
+/**
+ * Guess a model's capability from its id. OpenAI, DeepSeek and Qwen return nothing but
+ * {id, object, owned_by} — no capability, no pricing — so the id is all there is. Moonshot
+ * does return supports_image_in, but that is image INPUT (vision) on a chat model, which is
+ * not our "image" capability, so it is deliberately not read here.
+ *
+ * Every result is flagged guessed:true and shown as such: the admin confirms it before the
+ * model is registered, and a wrong guess is refused by the route picker anyway.
+ */
+export function guessCapability(id: string): Capability | null {
+  const name = id.toLowerCase();
+  if (/(^|[-_/])(gpt-image|dall-e|imagen|flux|stable-diffusion)/.test(name)) return "image";
+  if (/(^|[-_/])(tts|speech|audio-preview)/.test(name)) return "tts";
+  if (/(^|[-_/])(sora|veo|video)/.test(name)) return "video";
+  // embeddings, moderation, transcription: real models, but nothing in TASK_CAPABILITY
+  // routes to them, so they get no capability rather than a misleading one.
+  if (/(^|[-_/])(embedding|embed|moderation|whisper|transcribe|rerank)/.test(name)) return null;
+  return "chat";
+}
+
+/**
+ * Pull the human part out of an error body. "OpenAI-compatible" covers the request shape,
+ * not the error shape: OpenAI nests {error:{message}}, while xAI returns {error:"..."} as a
+ * plain string. Reading only the nested form threw away the one sentence worth showing —
+ * e.g. grok's "your team doesn't have any credits yet" became a bare "HTTP 403".
+ */
+function providerCode(body: { error?: { code?: string } | string; code?: string }): string | undefined {
+  if (typeof body.error === "string") return body.code;
+  return body.error?.code;
+}
+
+function providerMessage(body: { error?: { message?: string } | string }, status: number): string {
+  if (typeof body.error === "string" && body.error.trim()) return body.error;
+  if (body.error && typeof body.error === "object" && body.error.message) return body.error.message;
+  return `HTTP ${status}`;
 }
 
 export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
@@ -48,7 +86,7 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     });
     const json = (await res.json().catch(() => ({}))) as CompletionResponse;
     if (!res.ok) {
-      throw new AdapterHttpError(res.status, json.error?.message ?? `HTTP ${res.status}`, json.error?.code);
+      throw new AdapterHttpError(res.status, providerMessage(json, res.status), providerCode(json));
     }
     return json;
   }
@@ -167,15 +205,14 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     return { text, parsed, usage };
   }
 
-  async function healthCheck(model: string): Promise<HealthResult> {
+  async function healthCheck(model: string, capability: Capability = "chat"): Promise<HealthResult> {
     const started = Date.now();
     try {
       // Capability-appropriate canary (FR-15.5, design §6.3): a chat ping against an
       // image model answers "model not found" even when the route works — for non-chat
       // models, probe GET /models/{id} instead: validates auth + model existence for
       // free (a real smallest-size generation would bill per re-check-all click).
-      const registered = MODEL_REGISTRY.find((m) => m.provider === provider && m.model === model);
-      if (registered && registered.capability !== "chat") {
+      if (capability !== "chat") {
         const res = await fetch(`${cfg.baseUrl}/models/${encodeURIComponent(model)}`, {
           headers: { Authorization: `Bearer ${apiKey}` },
         });
@@ -229,8 +266,26 @@ export function openAiCompat(provider: ProviderId, env: Env): ProviderAdapter {
     return { imageBase64: b64, mimeType: "image/png", usage: { images: 1 } };
   }
 
+  async function listModels(): Promise<ProviderModel[]> {
+    if (!apiKey) throw new AdapterHttpError(401, `${cfg.keyEnv} is not set`);
+    const res = await fetch(`${cfg.baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: Array<{ id?: string }>;
+      error?: { message?: string; code?: string } | string;
+      code?: string;
+    };
+    if (!res.ok) {
+      throw new AdapterHttpError(res.status, providerMessage(json, res.status), providerCode(json));
+    }
+    return (json.data ?? [])
+      .filter((m): m is { id: string } => typeof m.id === "string")
+      .map((m) => ({ id: m.id, capability: guessCapability(m.id), guessed: true }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
   return {
     id: provider,
+    listModels,
     capabilities: provider === "openai" ? ["chat", "image", "search"] : ["chat"],
     chat,
     healthCheck,

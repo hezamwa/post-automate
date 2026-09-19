@@ -1,15 +1,21 @@
 import { and, count, eq, gte, sql } from "drizzle-orm";
 import type { ProviderId, TaskType } from "@post-automate/shared";
 import { schema, type Db } from "../db/client";
-import { MODEL_REGISTRY } from "./registry";
+import { findModel, type ModelInfo } from "@post-automate/shared";
+import { listModels } from "../db/queries";
 import type { Usage } from "./types";
 
 // Per-call cost computation → spend_ledger (FR-15.7, design §10). Prices come from
 // MODEL_REGISTRY; unpriced usage is a hard error so cost tracking can never silently
 // undercount.
 
-export function priceUsage(provider: ProviderId, model: string, usage: Usage): number {
-  const info = MODEL_REGISTRY.find((m) => m.provider === provider && m.model === model);
+export function priceUsage(
+  models: readonly ModelInfo[],
+  provider: ProviderId,
+  model: string,
+  usage: Usage,
+): number {
+  const info = findModel(models, provider, model);
   if (!info) {
     throw new Error(
       `Model ${provider}/${model} is not in the registry — add it with unit prices before routing to it (FR-15.4)`,
@@ -40,7 +46,9 @@ export async function recordSpend(
     usage: Usage;
   },
 ): Promise<number> {
-  const cost = priceUsage(args.provider, args.model, args.usage);
+  // Read per call rather than cached: prices are editable from the dashboard now, and a
+  // stale cache would bill at yesterday's rate (FR-15.7).
+  const cost = priceUsage(await listModels(db), args.provider, args.model, args.usage);
   await db.insert(schema.spendLedger).values({
     userId: args.userId,
     runId: args.runId ?? null,

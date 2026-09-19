@@ -9,7 +9,7 @@ export const PROVIDERS = [
   "qwen",
   "grok", // xAI — OpenAI-compatible API
   "manus", // agent platform — adapter shape verified at implementation (design §13)
-  "brave", // Brave Search — search capability only
+  "tavily", // Tavily — web search built for agents; search capability only
 ] as const;
 export type ProviderId = (typeof PROVIDERS)[number];
 
@@ -33,13 +33,23 @@ export const TASK_TYPES = [
   "video",
   "code_snippet",
   "refine",
+  // Two-step web search (FR-5.4/5.8): configure a route here and discovery/research fetch
+  // real results first and hand them to the chat model, instead of relying on the model's
+  // own search. No route configured = the LLM-native path, unchanged.
+  "web_search",
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
+// What the router will actually CALL for each task — not what the task is "about".
+// Corrected 2026-09-18: discovery/research were "search", but both run through
+// router.runTask → adapter.chat using LLM-native web search; only the image task takes
+// the runImageTask → adapter.generateImage path. The old values described intent, and
+// since nothing read this constant the mismatch stayed invisible. It is now the rule the
+// route picker and the /admin/ai/routes validator both enforce (see models.ts).
 export const TASK_CAPABILITY: Record<TaskType, Capability> = {
   interview: "chat",
-  discovery: "search",
-  research: "search",
+  discovery: "chat",
+  research: "chat",
   scoring: "chat",
   angles: "chat",
   article: "chat",
@@ -51,7 +61,13 @@ export const TASK_CAPABILITY: Record<TaskType, Capability> = {
   video: "video",
   code_snippet: "chat",
   refine: "chat",
+  web_search: "search",
 };
+
+// Tasks whose CHAT call may perform web search itself, billed per search (FR-5.4/5.8).
+// Still required even with a web_search route configured: that route is optional, and when
+// none exists these tasks fall back to the model's own search and are billed for it.
+export const TASK_NEEDS_WEB_SEARCH: ReadonlySet<TaskType> = new Set<TaskType>(["discovery", "research"]);
 
 export type HealthStatus =
   | "ok"

@@ -14,7 +14,7 @@ export interface Env {
   QWEN_API_KEY: string;
   GROK_API_KEY: string;
   MANUS_API_KEY: string;
-  BRAVE_API_KEY: string;
+  TAVILY_API_KEY: string;
   // Per-creator-project Editor tokens (FR-8.4/8.5): SANITY_TOKEN_<PROJECTID>.
   // Publishing resolves dynamically: env[`SANITY_TOKEN_${projectId.toUpperCase()}`].
   SANITY_TOKEN_R9ZDT0S0: string; // waleed_alhezam_personal_website

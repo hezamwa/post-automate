@@ -1,31 +1,9 @@
-import type { Capability, ProviderId, TaskType } from "@post-automate/shared";
+import type { ProviderId, TaskType } from "@post-automate/shared";
 
-// Model registry: allowed models + unit prices for validation and cost computation (FR-15.4).
-// Prices are estimates — verify against current provider pricing when wiring meter.ts.
-
-export interface ModelInfo {
-  provider: ProviderId;
-  model: string;
-  capability: Capability;
-  inputPerMTokUsd?: number;
-  outputPerMTokUsd?: number;
-  perImageUsd?: number;
-  perSearchUsd?: number;
-}
-
-export const MODEL_REGISTRY: ModelInfo[] = [
-  { provider: "anthropic", model: "claude-sonnet-5", capability: "chat", inputPerMTokUsd: 3, outputPerMTokUsd: 15, perSearchUsd: 0.01 },
-  { provider: "anthropic", model: "claude-haiku-4-5", capability: "chat", inputPerMTokUsd: 1, outputPerMTokUsd: 5, perSearchUsd: 0.01 },
-  { provider: "openai", model: "gpt-image-1", capability: "image", perImageUsd: 0.04 },
-  // Verified live 2026-07-16 via /v1/models; prices are estimates — confirm before heavy use
-  { provider: "openai", model: "gpt-4.1-mini", capability: "chat", inputPerMTokUsd: 0.4, outputPerMTokUsd: 1.6, perSearchUsd: 0.01 },
-  { provider: "openai", model: "gpt-5-mini", capability: "chat", inputPerMTokUsd: 0.25, outputPerMTokUsd: 2, perSearchUsd: 0.01 },
-  // Prices unset = verify current provider pricing before routing to it (meter.ts refuses unpriced models).
-  { provider: "grok", model: "grok-4", capability: "chat" },
-  { provider: "brave", model: "brave-web-search", capability: "search", perSearchUsd: 0.005 },
-  // Add OpenAI/Gemini/Moonshot/DeepSeek/Qwen chat models as routes need them (FR-15.1).
-  // Manus: agent-platform API — add once the adapter's capability mapping is verified (design §13).
-];
+// The model registry is a TABLE now (ai_models, migration 0010), not a constant: an admin
+// adds a provider's model and its prices from the dashboard, no deploy (FR-15.4, mirroring
+// FR-15.3's "routing config is data"). Read it with listModels(db); the rule deciding what
+// may serve which task is pure and lives in @post-automate/shared.
 
 // Seed data for ai_routes (design §6.4) — inserted by tools/seed.ts, NOT read at runtime.
 // Runtime routing always resolves from the ai_routes table (FR-15.3).

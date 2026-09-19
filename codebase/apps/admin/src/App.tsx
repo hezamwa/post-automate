@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { ApiError, clearSession, getSession, login, type SessionUser } from "./api";
+import { ModelsView } from "./views/Models";
 import { MonitorView } from "./views/Monitor";
 import { RoutesView } from "./views/Routes";
 import { UsersView } from "./views/Users";
 
 // Admin web dashboard v1 (OD-17, design §15): same Worker API, same JWT flow,
-// role=admin required. Panels: monitor + switches · AI routes + tests · users.
+// role=admin required. Panels: monitor + switches · AI routes + tests · model registry · users.
 
-type Tab = "monitor" | "routes" | "users";
+type Tab = "monitor" | "routes" | "models" | "users";
 
 function LoginView({ onLogin }: { onLogin: (u: SessionUser) => void }) {
   const [email, setEmail] = useState("");
@@ -58,7 +59,7 @@ export function App() {
       <nav>
         <h1>Post-Automate Admin</h1>
         <span className="tabs" style={{ display: "flex", gap: "0.5rem", marginLeft: "1rem" }}>
-          {(["monitor", "routes", "users"] as Tab[]).map((t) => (
+          {(["monitor", "routes", "models", "users"] as Tab[]).map((t) => (
             <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
               {t[0]!.toUpperCase() + t.slice(1)}
             </button>
@@ -78,6 +79,7 @@ export function App() {
       <main>
         {tab === "monitor" && <MonitorView />}
         {tab === "routes" && <RoutesView />}
+        {tab === "models" && <ModelsView />}
         {tab === "users" && <UsersView selfId={user.id} />}
       </main>
     </>

@@ -5,7 +5,8 @@ in each creator's voice with derivatives (hero image, X version, translation), r
 AI task through a configurable multi-provider layer, and publishes to Sanity after human
 approval.
 
-Spec: [docs/requirement.md](docs/requirement.md) · Design: [docs/design.md](docs/design.md)
+Spec: [docs/requirement.md](docs/requirement.md) · Design: [docs/design.md](docs/design.md) ·
+Article workflow: [docs/article-workflow.md](docs/article-workflow.md)
 
 ## Layout
 
@@ -16,7 +17,7 @@ Spec: [docs/requirement.md](docs/requirement.md) · Design: [docs/design.md](doc
 | `codebase/apps/admin` | Admin web dashboard (routing config, monitoring, budgets) |
 | `codebase/packages/shared` | Zod schemas + shared TS types (profile, task types) |
 | `codebase/tools/` | Seed scripts, evals, run helpers |
-| `docs/` | Requirements, design, runbook |
+| `docs/` | Requirements, design, article workflow, runbook |
 
 Sanity Studio (post/author schemas) lives in the existing sites' repo — not here.
 

@@ -53,6 +53,7 @@ export const healthStatus = pgEnum("health_status", [
   "timeout",
   "provider_error",
 ]);
+export const modelCapability = pgEnum("model_capability", ["chat", "image", "tts", "video", "search"]);
 export const configSource = pgEnum("config_source", ["admin", "seed", "migration"]);
 export const derivativeKind = pgEnum("derivative_kind", ["hero_image", "x", "linkedin", "translation"]);
 export const derivativeOutcome = pgEnum("derivative_outcome", ["produced", "skipped", "failed"]);
@@ -224,6 +225,28 @@ export const spendLedger = pgTable("spend_ledger", {
   estCostUsd: numeric("est_cost_usd").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Model registry (FR-15.4): which models may be routed to, and what they cost. Moved out
+// of code and into the database on 2026-09-18 so an admin can add a provider's model and
+// its prices without a deploy — the same reasoning that made routing config data (FR-15.3).
+// Prices are nullable because a model is often known before its prices are confirmed; an
+// unpriced model is refused at routing time rather than silently costing an unknown amount.
+export const aiModels = pgTable(
+  "ai_models",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider: text("provider").notNull(), // ProviderId from @post-automate/shared
+    model: text("model").notNull(),
+    capability: modelCapability("capability").notNull(),
+    inputPerMTokUsd: numeric("input_per_mtok_usd"),
+    outputPerMTokUsd: numeric("output_per_mtok_usd"),
+    perImageUsd: numeric("per_image_usd"),
+    perSearchUsd: numeric("per_search_usd"),
+    notes: text("notes"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("ai_models_provider_model").on(t.provider, t.model)],
+);
 
 // Routing config: global default (user_id NULL) + per-user overrides; versioned (FR-15.3, DR-9.8)
 export const aiRoutes = pgTable(

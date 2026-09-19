@@ -306,3 +306,52 @@ export async function createDraft(
     .returning({ id: schema.drafts.id });
   return row!;
 }
+
+// ── AI route editing (FR-15.3) ────────────────────────────────────────────────────────
+// Both of these exist because ai_routes has two constraints that make the obvious
+// single-statement version wrong: ai_health_checks.route_id is a NOT NULL FK onto it, and
+// (user_id, task_type, priority) is unique NULLS NOT DISTINCT.
+
+/**
+ * Delete a route and its health history, FK leaves first (same ordering rule as
+ * deleteUserCascade). Health checks are diagnostics for a route that is about to stop
+ * existing; spend_ledger and drafts.generation_meta record provider/model as plain data,
+ * never as a FK, so cost history and provenance survive the delete untouched.
+ */
+export async function deleteRouteCascade(db: Db, routeId: string): Promise<{ healthChecksDeleted: number }> {
+  let healthChecksDeleted = 0;
+  await db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(schema.aiHealthChecks)
+      .where(eq(schema.aiHealthChecks.routeId, routeId))
+      .returning({ id: schema.aiHealthChecks.id });
+    healthChecksDeleted = removed.length;
+    await tx.delete(schema.aiRoutes).where(eq(schema.aiRoutes.id, routeId));
+  });
+  return { healthChecksDeleted };
+}
+
+/**
+ * Renumber one task's routes to priorities 0..n-1 in the given order (0 = primary, FR-15.6).
+ *
+ * Two passes, because the unique index would reject an in-place swap the moment two rows
+ * briefly share a priority: first park every row at a negative priority (a range the index
+ * permits and no real route uses), then write the final values. One transaction, so a
+ * failure can never leave routes parked.
+ */
+export async function reorderRoutes(db: Db, orderedIds: string[]): Promise<void> {
+  await db.transaction(async (tx) => {
+    for (const [i, id] of orderedIds.entries()) {
+      await tx
+        .update(schema.aiRoutes)
+        .set({ priority: -(i + 1) })
+        .where(eq(schema.aiRoutes.id, id));
+    }
+    for (const [i, id] of orderedIds.entries()) {
+      await tx
+        .update(schema.aiRoutes)
+        .set({ priority: i, updatedAt: new Date() })
+        .where(eq(schema.aiRoutes.id, id));
+    }
+  });
+}

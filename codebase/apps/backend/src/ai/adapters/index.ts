@@ -2,8 +2,8 @@ import type { ProviderId } from "@post-automate/shared";
 import type { Env } from "../../shared/env";
 import type { ProviderAdapter } from "../types";
 import { createAnthropicAdapter } from "./anthropic";
-import { brave } from "./brave";
-import { google } from "./google";
+import { createTavilyAdapter } from "./tavily";
+import { createGoogleAdapter } from "./google";
 import { manus } from "./manus";
 import { openAiCompat } from "./openai-compat";
 
@@ -20,9 +20,9 @@ export function getAdapter(provider: ProviderId, env: Env): ProviderAdapter {
     case "grok":
       return openAiCompat(provider, env);
     case "google":
-      return google;
-    case "brave":
-      return brave;
+      return createGoogleAdapter(env);
+    case "tavily":
+      return createTavilyAdapter(env);
     case "manus":
       return manus;
   }

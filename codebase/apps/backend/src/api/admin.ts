@@ -1,22 +1,36 @@
 import { Hono } from "hono";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { PROVIDERS, TASK_TYPES } from "@post-automate/shared";
+import { CAPABILITIES, PROVIDERS, TASK_TYPES } from "@post-automate/shared";
 import { requireAdmin, type AuthedEnv } from "../auth/middleware";
+import { getAdapter } from "../ai/adapters";
 import { testRoute } from "../ai/health";
 import { monthToDateUsd } from "../ai/meter";
-import { MODEL_REGISTRY } from "../ai/registry";
+import { routeRejection } from "@post-automate/shared";
 import { createDb, schema } from "../db/client";
-import { deleteUserCascade, reactivateUser, suspendUser, upsertUserLimits } from "../db/commands";
-import { latestHealthByRoute, listRoutes, monitorSnapshot, recentHealthChecks } from "../db/queries";
+import {
+  deleteRouteCascade,
+  deleteUserCascade,
+  reactivateUser,
+  reorderRoutes,
+  suspendUser,
+  upsertUserLimits,
+} from "../db/commands";
+import {
+  latestHealthByRoute,
+  listModels,
+  listRoutes,
+  monitorSnapshot,
+  recentHealthChecks,
+  routesUsingModel,
+} from "../db/queries";
 import { projectMonthEndUsd } from "../shared/budget";
 import { describeFlags, flagAudit, FLAGS, getFlags, setFlag, type FlagKey } from "../shared/flags";
 import { hashPassword } from "../shared/password";
 
-// FR-15.4: routes may only point at registered models — validation + pricing live there.
-function modelKnown(provider: string, model: string): boolean {
-  return MODEL_REGISTRY.some((m) => m.provider === provider && m.model === model);
-}
+// FR-15.4/15.2: a route may only point at a registered model that can actually serve its
+// task. routeRejection() is the shared rule the admin dashboard builds its picker from, so
+// the UI cannot offer a combination this endpoint would refuse.
 
 const routeBodySchema = z
   .object({
@@ -28,6 +42,52 @@ const routeBodySchema = z
     params: z.record(z.unknown()).default({}),
     enabled: z.boolean().default(true),
   })
+  .strict();
+
+type PriceInput = {
+  inputPerMTokUsd?: number | null;
+  outputPerMTokUsd?: number | null;
+  perImageUsd?: number | null;
+  perSearchUsd?: number | null;
+};
+type PriceColumns = { [K in keyof PriceInput]: string | null };
+
+/**
+ * Prices cross the wire as numbers; the numeric columns take strings. An omitted field is
+ * left alone (PATCH semantics), an explicit null clears the price — which makes the model
+ * unroutable again rather than free.
+ */
+function toPriceColumns(body: PriceInput): PriceColumns {
+  const out: PriceColumns = {};
+  for (const key of ["inputPerMTokUsd", "outputPerMTokUsd", "perImageUsd", "perSearchUsd"] as const) {
+    const value = body[key];
+    if (value === undefined) continue;
+    out[key] = value === null ? null : String(value);
+  }
+  return out;
+}
+
+const priceFields = {
+  inputPerMTokUsd: z.number().nonnegative().nullish(),
+  outputPerMTokUsd: z.number().nonnegative().nullish(),
+  perImageUsd: z.number().nonnegative().nullish(),
+  perSearchUsd: z.number().nonnegative().nullish(),
+  notes: z.string().max(500).nullish(),
+};
+
+const modelBodySchema = z
+  .object({
+    provider: z.enum(PROVIDERS),
+    model: z.string().min(1).max(200),
+    capability: z.enum(CAPABILITIES),
+    ...priceFields,
+  })
+  .strict();
+
+const modelPatchSchema = z.object({ capability: z.enum(CAPABILITIES).optional(), ...priceFields }).strict();
+
+const reorderSchema = z
+  .object({ orderedIds: z.array(z.string().uuid()).min(1) })
   .strict();
 
 const routePatchSchema = z
@@ -128,10 +188,9 @@ export const admin = new Hono<AuthedEnv>()
     const parsed = routeBodySchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid body" }, 400);
     const body = parsed.data;
-    if (!modelKnown(body.provider, body.model)) {
-      return c.json({ error: `Model '${body.model}' is not registered for ${body.provider} — add it to the model registry with unit prices first (FR-15.4).` }, 400);
-    }
     const db = createDb(c.env);
+    const rejection = routeRejection(await listModels(db), body.provider, body.model, body.taskType);
+    if (rejection) return c.json({ error: rejection }, 400);
     try {
       const [row] = await db
         .insert(schema.aiRoutes)
@@ -154,8 +213,10 @@ export const admin = new Hono<AuthedEnv>()
     if (!route) return c.json({ error: "route not found" }, 404);
     const provider = patch.provider ?? (route.provider as (typeof PROVIDERS)[number]);
     const model = patch.model ?? route.model;
-    if ((patch.provider || patch.model) && !modelKnown(provider, model)) {
-      return c.json({ error: `Model '${model}' is not registered for ${provider} — add it to the model registry with unit prices first (FR-15.4).` }, 400);
+    if (patch.provider || patch.model) {
+      // taskType is immutable on a route, so the existing one is what we validate against
+      const rejection = routeRejection(await listModels(db), provider, model, route.taskType as (typeof TASK_TYPES)[number]);
+      if (rejection) return c.json({ error: rejection }, 400);
     }
     const [row] = await db
       .update(schema.aiRoutes)
@@ -164,6 +225,159 @@ export const admin = new Hono<AuthedEnv>()
       .where(eq(schema.aiRoutes.id, route.id))
       .returning();
     return c.json({ route: row });
+  })
+
+  // FR-15.3: remove a route outright. Disabling leaves a wrong route in the table forever;
+  // the dashboard needs a way to undo a mistake, and the last enabled route for a task
+  // disappearing is the documented way to turn a capability off (FR-15.13).
+  .delete("/ai/routes/:id", async (c) => {
+    const db = createDb(c.env);
+    const route = await db.query.aiRoutes.findFirst({ where: eq(schema.aiRoutes.id, c.req.param("id")) });
+    if (!route) return c.json({ error: "route not found" }, 404);
+    const { healthChecksDeleted } = await deleteRouteCascade(db, route.id);
+    return c.json({ ok: true, deleted: { id: route.id, healthChecksDeleted } });
+  })
+
+  // FR-15.6: fallback ORDER is the whole meaning of priority, so it gets a first-class
+  // endpoint — renumbering by hand trips the (user, task, priority) unique index.
+  .post("/ai/routes/reorder", async (c) => {
+    const parsed = reorderSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid body" }, 400);
+    const { orderedIds } = parsed.data;
+    const db = createDb(c.env);
+    const rows = await db.select().from(schema.aiRoutes).where(inArray(schema.aiRoutes.id, orderedIds));
+    if (rows.length !== orderedIds.length) {
+      return c.json({ error: "One or more of those routes no longer exists — reload and try again." }, 404);
+    }
+    // One ordering belongs to exactly one (scope, task) chain; mixing them would renumber
+    // across chains and silently repoint traffic.
+    const scopes = new Set(rows.map((r) => `${r.userId ?? "global"}:${r.taskType}`));
+    if (scopes.size > 1) {
+      return c.json({ error: "Those routes span more than one task or scope — reorder one chain at a time." }, 400);
+    }
+    const group = rows[0]!;
+    const all = await db
+      .select({ id: schema.aiRoutes.id })
+      .from(schema.aiRoutes)
+      .where(
+        and(
+          group.userId ? eq(schema.aiRoutes.userId, group.userId) : isNull(schema.aiRoutes.userId),
+          eq(schema.aiRoutes.taskType, group.taskType),
+        ),
+      );
+    if (all.length !== orderedIds.length) {
+      return c.json(
+        { error: "That ordering is missing some of the task's routes — send the whole chain, primary first." },
+        400,
+      );
+    }
+    await reorderRoutes(db, orderedIds);
+    return c.json({ routes: await listRoutes(db) });
+  })
+
+  // ── Model registry CRUD (FR-15.4) ──────────────────────────────────────────────────
+  // The registry became a table so a provider's model + prices can be added without a
+  // deploy. Prices are what the budget gates are computed from, so they are written exactly
+  // as given: a missing price stays NULL (routing refuses it) rather than defaulting to 0.
+  .get("/ai/models", async (c) => c.json({ models: await listModels(createDb(c.env)) }))
+
+  // The provider's OWN catalogue, fetched live (FR-15.4 registry assist): picking a model
+  // from a real list beats typing an id from memory and finding out at the first call.
+  // Deliberately not cached — a catalogue is only worth showing if it is current.
+  .get("/ai/providers/:provider/models", async (c) => {
+    const provider = c.req.param("provider");
+    if (!(PROVIDERS as readonly string[]).includes(provider)) {
+      return c.json({ error: `Unknown provider '${provider}'.` }, 400);
+    }
+    const adapter = getAdapter(provider as (typeof PROVIDERS)[number], c.env);
+    if (!adapter.listModels) {
+      return c.json({ error: `${provider} publishes no model listing — add its models by id.` }, 501);
+    }
+    try {
+      return c.json({ models: await adapter.listModels() });
+    } catch (e) {
+      // A provider that is down, unpaid or misconfigured must say so in words the admin can
+      // act on — never a bare 500 (FR-15.5's spirit).
+      const { status, code } = (adapter.classifyError ?? (() => ({ status: "provider_error" as const, code: undefined })))(e);
+      return c.json(
+        {
+          error: `Could not list ${provider} models (${status}${code ? `, HTTP ${code}` : ""}): ${
+            e instanceof Error ? e.message.slice(0, 300) : "unknown error"
+          }`,
+        },
+        502,
+      );
+    }
+  })
+  .post("/ai/models", async (c) => {
+    const parsed = modelBodySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid body" }, 400);
+    const body = parsed.data;
+    const db = createDb(c.env);
+    try {
+      const [row] = await db
+        .insert(schema.aiModels)
+        .values({
+          provider: body.provider,
+          model: body.model,
+          capability: body.capability,
+          notes: body.notes ?? null,
+          ...toPriceColumns(body),
+        })
+        .returning();
+      return c.json({ model: row }, 201);
+    } catch (e) {
+      if (e instanceof Error && /ai_models_provider_model|duplicate/i.test(e.message)) {
+        return c.json({ error: `${body.provider}/${body.model} is already registered — edit it instead.` }, 409);
+      }
+      throw e;
+    }
+  })
+  .patch("/ai/models/:id", async (c) => {
+    const parsed = modelPatchSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid body" }, 400);
+    const db = createDb(c.env);
+    const existing = await db.query.aiModels.findFirst({ where: eq(schema.aiModels.id, c.req.param("id")) });
+    if (!existing) return c.json({ error: "model not found" }, 404);
+    // Capability decides which routes are valid, so narrowing it could strand live routes.
+    if (parsed.data.capability && parsed.data.capability !== existing.capability) {
+      const inUse = await routesUsingModel(db, existing.provider, existing.model);
+      if (inUse.length > 0) {
+        return c.json(
+          {
+            error: `${existing.provider}/${existing.model} is routed for ${[...new Set(inUse.map((r) => r.taskType))].join(", ")} — delete those routes before changing its capability (FR-15.4).`,
+          },
+          409,
+        );
+      }
+    }
+    const [row] = await db
+      .update(schema.aiModels)
+      .set({
+        ...(parsed.data.capability ? { capability: parsed.data.capability } : {}),
+        ...(parsed.data.notes !== undefined ? { notes: parsed.data.notes } : {}),
+        ...toPriceColumns(parsed.data),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.aiModels.id, existing.id))
+      .returning();
+    return c.json({ model: row });
+  })
+  .delete("/ai/models/:id", async (c) => {
+    const db = createDb(c.env);
+    const existing = await db.query.aiModels.findFirst({ where: eq(schema.aiModels.id, c.req.param("id")) });
+    if (!existing) return c.json({ error: "model not found" }, 404);
+    const inUse = await routesUsingModel(db, existing.provider, existing.model);
+    if (inUse.length > 0) {
+      return c.json(
+        {
+          error: `${existing.provider}/${existing.model} is still routed for ${[...new Set(inUse.map((r) => r.taskType))].join(", ")} — delete those routes first, or the registry would no longer describe what the router calls (FR-15.4).`,
+        },
+        409,
+      );
+    }
+    await db.delete(schema.aiModels).where(eq(schema.aiModels.id, existing.id));
+    return c.json({ ok: true, deleted: { provider: existing.provider, model: existing.model } });
   })
 
   // FR-15.5: canary-test THIS route (never its fallbacks); explicitly admin-triggered,

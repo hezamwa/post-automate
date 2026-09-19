@@ -7,7 +7,7 @@ import { getAdapter } from "./adapters";
 import { assertAiAllowed } from "./gates";
 import { errorMessage, primaryRouteFailedTwice } from "./health";
 import { recordSpend } from "./meter";
-import type { ChatRequest, ChatResult } from "./types";
+import type { ChatRequest, ChatResult, SearchResult } from "./types";
 
 /** FR-15.6: record the failure, and push to admins when a PRIMARY route fails twice running. */
 async function recordRouteFailure(
@@ -175,6 +175,74 @@ export async function runImageTask(env: Env, db: Db, args: RunImageArgs): Promis
   throw new Error(
     `All ${routes.length} route(s) failed for task '${args.taskType}': ${failures.join("; ")}. See ai_health_checks (FR-15.6).`,
   );
+}
+
+export interface RunSearchArgs {
+  userId: string | null;
+  runId?: string | null;
+  query: string;
+  count?: number;
+  freshness?: "day" | "week" | "month";
+  /** Admin-triggered route tests only — bypasses ai.paused and the global cap (§10/§10.1). */
+  adminRouteTest?: boolean;
+}
+
+export interface RunSearchResult extends SearchResult {
+  provider: ProviderId;
+  model: string;
+  costUsd: number;
+}
+
+/**
+ * Raw web search through the configured 'web_search' route (FR-5.4/5.8) — the first half of
+ * the two-step discovery path, where real results are fetched and handed to a chat model
+ * rather than asking the model to search for itself. Same gates, fallback, metering and
+ * alerts as runTask; billed per search, which is why the registry demands a per-search price
+ * before a route may point at a search provider.
+ */
+export async function runSearch(env: Env, db: Db, args: RunSearchArgs): Promise<RunSearchResult> {
+  const gate = await assertAiAllowed(db, args.userId, { adminRouteTest: args.adminRouteTest });
+  const routes = await resolveRoutes(db, "web_search", args.userId);
+  if (routes.length === 0) throw new NoRouteError("web_search");
+
+  const failures: string[] = [];
+  for (const route of routes) {
+    const provider = route.provider as ProviderId;
+    const adapter = getAdapter(provider, env);
+    if (!adapter.search) {
+      failures.push(`${provider}: no search capability`);
+      continue;
+    }
+    try {
+      const result = await adapter.search({
+        model: route.model,
+        query: args.query,
+        count: args.count,
+        freshness: args.freshness,
+      });
+      const costUsd = await recordSpend(db, {
+        userId: args.userId,
+        runId: args.runId,
+        taskType: "web_search",
+        provider,
+        model: route.model,
+        usage: result.usage,
+      });
+      await maybeBudgetAlerts(env, db, { gate, costUsd, userId: args.userId });
+      return { ...result, provider, model: route.model, costUsd };
+    } catch (e) {
+      const status = await recordRouteFailure(env, db, route, "web_search", e);
+      failures.push(`${provider}/${route.model} → ${status}`);
+    }
+  }
+  throw new Error(
+    `All ${routes.length} route(s) failed for task 'web_search': ${failures.join("; ")}. See ai_health_checks for details (FR-15.6).`,
+  );
+}
+
+/** Is a task routable at all? Lets a caller choose a path instead of catching NoRouteError. */
+export async function hasRouteFor(db: Db, taskType: TaskType, userId: string | null): Promise<boolean> {
+  return (await resolveRoutes(db, taskType, userId)).length > 0;
 }
 
 async function resolveRoutes(db: Db, taskType: TaskType, userId: string | null): Promise<RouteRow[]> {

@@ -1,6 +1,7 @@
 // Read-side helpers (CQRS query side, AR-10.6): drafts queue, routing config,
 // route health, and the /admin/monitor snapshot (FR-15.11).
-import { asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import type { ModelInfo } from "@post-automate/shared";
 import { schema, type Db } from "./client";
 
 /**
@@ -247,4 +248,38 @@ export async function monitorSnapshot(db: Db) {
       draftsByStatus: draftsByStatus.map((r) => ({ status: r.status, n: r.n })),
     },
   };
+}
+
+/**
+ * The model registry (FR-15.4), as the rest of the code wants it. Numeric columns come back
+ * from pg as strings — converted here, once, so no caller ever multiplies a string by a
+ * token count. A NULL price stays undefined rather than becoming 0: "unpriced" must keep
+ * failing loudly at metering, not quietly cost nothing.
+ */
+export type ModelRow = ModelInfo & { id: string; updatedAt: Date };
+
+export async function listModels(db: Db): Promise<ModelRow[]> {
+  const rows = await db.select().from(schema.aiModels).orderBy(asc(schema.aiModels.provider), asc(schema.aiModels.model));
+  return rows.map((r) => ({
+    // id/updatedAt ride along for the admin surface: the pricing and validation callers
+    // ignore them, and without the id the dashboard cannot address a row to edit it.
+    id: r.id,
+    updatedAt: r.updatedAt,
+    provider: r.provider as ModelInfo["provider"],
+    model: r.model,
+    capability: r.capability,
+    inputPerMTokUsd: r.inputPerMTokUsd == null ? undefined : Number(r.inputPerMTokUsd),
+    outputPerMTokUsd: r.outputPerMTokUsd == null ? undefined : Number(r.outputPerMTokUsd),
+    perImageUsd: r.perImageUsd == null ? undefined : Number(r.perImageUsd),
+    perSearchUsd: r.perSearchUsd == null ? undefined : Number(r.perSearchUsd),
+    notes: r.notes,
+  }));
+}
+
+/** Routes pointing at a given model — a model in use may not be deleted (FR-15.4). */
+export async function routesUsingModel(db: Db, provider: string, model: string) {
+  return db
+    .select()
+    .from(schema.aiRoutes)
+    .where(and(eq(schema.aiRoutes.provider, provider), eq(schema.aiRoutes.model, model)));
 }
