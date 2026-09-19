@@ -1,5 +1,5 @@
 // Write-side helpers for pipeline runs, drafts and users (CQRS command side, AR-10.6).
-import { count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import { schema, type Db } from "./client";
 
 type RunState = (typeof schema.runState.enumValues)[number];
@@ -209,11 +209,19 @@ export async function rejectDraft(
     .where(eq(schema.drafts.id, draftId));
 }
 
-export async function expireDraft(db: Db, draftId: string): Promise<void> {
-  await db
-    .update(schema.drafts)
-    .set({ status: "expired", markdown: null, decidedAt: new Date() })
-    .where(eq(schema.drafts.id, draftId));
+/** Spec §5.1: the instance ended without a decision — a flag, never a status change; nothing is lost. */
+export async function markDraftStale(db: Db, draftId: string): Promise<void> {
+  await db.update(schema.drafts).set({ stale: true }).where(eq(schema.drafts.id, draftId));
+}
+
+/** Spec §2: any authenticated app request counts as activity. */
+export async function touchLastActive(db: Db, userId: string): Promise<void> {
+  await db.update(schema.users).set({ lastActiveAt: new Date() }).where(eq(schema.users.id, userId));
+}
+
+/** First open of the review screen by the owner (spec §5.2); later opens leave it alone. */
+export async function markDraftSeen(db: Db, draftId: string): Promise<void> {
+  await db.update(schema.drafts).set({ seenAt: new Date() }).where(and(eq(schema.drafts.id, draftId), isNull(schema.drafts.seenAt)));
 }
 
 export interface DerivativeRecord {

@@ -18,18 +18,16 @@ describe("entry gates step", () => {
     expect(await exec(createRunContext(env, await startRun()))).toEqual({ ok: true });
   });
 
-  it("skips with the kind when two drafts are pending (FR-7.4)", async () => {
+  it("skips with the kind when one draft is undecided (FR-7.4, spec §2)", async () => {
     const params = await startRun();
-    await seedDraft(shared.db, params.userId, params.runId, "pending_approval");
     await seedDraft(shared.db, params.userId, params.runId, "revising");
     expect(await exec(createRunContext(env, params))).toMatchObject({ ok: false, kind: "pending_drafts" });
   });
 
-  it("lets a user-requested run past the pending-drafts check (FR-7.7)", async () => {
+  it("holds a user-requested run to the same one-pending rule (spec §2)", async () => {
     const params = await startRun({ userTopic: { title: "mine" } });
     await seedDraft(shared.db, params.userId, params.runId, "pending_approval");
-    await seedDraft(shared.db, params.userId, params.runId, "pending_approval");
-    expect(await exec(createRunContext(env, params))).toEqual({ ok: true });
+    expect(await exec(createRunContext(env, params))).toMatchObject({ ok: false, kind: "pending_drafts" });
   });
 
   it("treats a cap as a decision: GateError is non-retryable", async () => {

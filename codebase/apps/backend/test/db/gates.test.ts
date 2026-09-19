@@ -241,11 +241,10 @@ describe("assertRunnable — run-level gates", () => {
     await expect(assertRunnable(db, userId, { runId })).resolves.toBeDefined();
   });
 
-  it("SKIPS rather than fails when 2 drafts already await review (FR-7.4, OD-19)", async () => {
+  it("SKIPS rather than fails when ONE draft already awaits review (FR-7.4, spec §2)", async () => {
     const userId = await seedUser(db, { maxRunsPerDay: 10 });
     const prior = await seedRun(db, userId);
     await seedDraft(db, userId, prior, "pending_approval");
-    await seedDraft(db, userId, prior, "revising");
     const runId = await seedRun(db, userId);
     // A skip is not a failure — DR-9.4 records it as `skipped`, and the user gets a
     // reminder push instead of a new draft (kind drives the FR-7.4 reminder).
@@ -260,13 +259,12 @@ describe("assertRunnable — run-level gates", () => {
     );
   });
 
-  it("lets a user-requested run past the pending-drafts gate (FR-7.7)", async () => {
+  it("holds user-requested runs to the same rule since v2 (spec §2: decide the pending draft first)", async () => {
     const userId = await seedUser(db, { maxRunsPerDay: 10 });
     const prior = await seedRun(db, userId);
-    await seedDraft(db, userId, prior, "pending_approval");
-    await seedDraft(db, userId, prior, "pending_approval");
+    await seedDraft(db, userId, prior, "revising");
     const runId = await seedRun(db, userId);
-    await expect(assertRunnable(db, userId, { runId, userRequested: true })).resolves.toBeDefined();
+    await expect(assertRunnable(db, userId, { runId, userRequested: true })).rejects.toThrow(SkipRunError);
   });
 
   it("never lets a user-requested run past the budget cap (FR-7.7)", async () => {

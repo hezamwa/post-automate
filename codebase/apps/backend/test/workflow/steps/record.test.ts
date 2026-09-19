@@ -43,12 +43,12 @@ describe("record step", () => {
     expect(await runRow(ctx.runId)).toMatchObject({ state: "rejected", error: "rejected: changed_mind" });
   });
 
-  it("expired: expires the draft and closes the run", async () => {
+  it("stale: flags the draft, keeps everything, and does NOT close the run (spec §5.1)", async () => {
     const ctx = await stepContext();
-    const draftId = await seedDraftRow(ctx);
-    await exec(ctx, { outcome: "expired", draftId }, "expire");
-    expect(await draftRow(ctx.runId)).toMatchObject({ status: "expired", markdown: null });
-    expect((await runRow(ctx.runId))?.state).toBe("expired");
+    const draftId = await seedDraftRow(ctx, { markdown: "# kept" });
+    await exec(ctx, { outcome: "stale", draftId }, "stale");
+    expect(await draftRow(ctx.runId)).toMatchObject({ status: "pending_approval", stale: true, markdown: "# kept" });
+    expect(await runRow(ctx.runId)).toMatchObject({ state: "discovering", finishedAt: null });
   });
 
   it("refuses an unknown outcome", async () => {

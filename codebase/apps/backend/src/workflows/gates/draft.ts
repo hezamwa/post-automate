@@ -11,11 +11,13 @@ import { schema } from "../../db/client";
 import { eq } from "drizzle-orm";
 
 // The approval gate (spec §5, AR-10.5). Always `ask`, for every user — it has no setting
-// and is the one gate resolveGate does not handle. v1 semantics until the no-expiry
-// phase: 7-day wait, timeout → expired.
+// and is the one gate resolveGate does not handle. It never expires the DRAFT: the wait
+// is the longest Workflows allows, and when the instance finally times out the draft is
+// flagged stale and stays first in the queue (spec §5.1).
 
 export const approvalSchema = z.object({
-  action: z.enum(["approve", "reject", "revise", "change_angle", "expired"]),
+  /** `timeout` is internal: the wait ended without an answer (spec §5.1) — never sent by the app. */
+  action: z.enum(["approve", "reject", "revise", "change_angle", "timeout"]),
   publishMode: z.enum(["now", "next_slot"]).optional(), // FR-7.5
   editedMarkdown: z.string().optional(), // FR-6.9
   /** The derivatives gate (spec §4.1): ticked kinds; absent = the profile decides. */
@@ -28,9 +30,10 @@ export const approvalSchema = z.object({
 export type ApprovalEventPayload = z.infer<typeof approvalSchema>;
 
 export const DRAFT_EVENT_TYPE = "approval";
-export const DRAFT_WAIT_TIMEOUT = "7 days";
+/** The maximum a Workflows waitForEvent may wait (limits doc: 365 days). */
+export const DRAFT_WAIT_TIMEOUT = "365 days";
 
-/** Park until the reviewer decides. A wait that ends without an answer reads as `expired`. */
+/** Park until the reviewer decides. A wait that ends without an answer reads as `timeout`. */
 export async function waitForDraftDecision(step: WorkflowStep, attempt: number): Promise<ApprovalEventPayload> {
   let payload: unknown;
   try {
@@ -40,7 +43,7 @@ export async function waitForDraftDecision(step: WorkflowStep, attempt: number):
     });
     payload = event.payload;
   } catch {
-    return { action: "expired" };
+    return { action: "timeout" };
   }
   return approvalSchema.parse(payload);
 }

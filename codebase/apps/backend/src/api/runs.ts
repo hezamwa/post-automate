@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
 import { createRun } from "../db/commands";
+import { undecidedDraft } from "../db/queries";
 import { checkTopicRequest } from "../modules/discovery";
 import { getActiveProfile } from "../modules/profiles";
 import { getFlags } from "../shared/flags";
@@ -23,6 +24,20 @@ const requestSchema = z
     overrideBannedTopics: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * Spec §2 / FR-7.4 (v2): one undecided draft is the limit. The Generate button opens it
+ * instead of starting a run — 409 with the draft id so the app can deep-link. The entry
+ * gates inside the run are the backstop.
+ */
+async function refuseWhilePending(db: Db, userId: string) {
+  const pending = await undecidedDraft(db, userId);
+  if (!pending) return null;
+  return {
+    error: "A draft is already waiting for your decision — approve, edit or reject it before starting a new run (FR-7.4).",
+    existingDraftId: pending.id,
+  };
+}
 
 async function launchRun(
   c: { env: Env },
@@ -86,6 +101,8 @@ export const runs = new Hono<AuthedEnv>()
       );
     }
     const userId = c.get("userId");
+    const pending = await refuseWhilePending(db, userId);
+    if (pending) return c.json(pending, 409);
     let profileVersion: number;
     try {
       profileVersion = (await getActiveProfile(db, userId)).version;
@@ -110,6 +127,8 @@ export const runs = new Hono<AuthedEnv>()
       );
     }
     const userId = c.get("userId");
+    const pending = await refuseWhilePending(db, userId);
+    if (pending) return c.json(pending, 409);
     let profileVersion: number;
     let warnings;
     try {

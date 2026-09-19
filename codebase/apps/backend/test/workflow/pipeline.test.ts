@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { resetShared, shared } from "./preamble";
 import { seedDraft, seedSpend } from "../db/harness";
 import { techProfile } from "../fixtures";
-import { candidateRows, derivativeRows, draftRow, revisionRows, runRow, runWorkflow, seedSearchRoute, startRun } from "./harness";
+import { approveDirect } from "../../src/workflows/direct";
+import { candidateRows, derivativeRows, draftRow, env, revisionRows, runRow, runWorkflow, seedSearchRoute, startRun } from "./harness";
 import { article } from "./mocks";
 
 // The article flow end to end through the new structure (spec §1 order): every path the
@@ -246,12 +247,26 @@ describe("the review loop (FR-7.9)", () => {
     expect(shared.ai.callsFor("shorten_x")).toHaveLength(0);
   });
 
-  it("no decision within the wait → expired (v1 semantics), Sanity draft kept for manual handling", async () => {
+  it("no decision within the instance's wait → draft flagged STALE, nothing lost, run still pending (spec §5.1)", async () => {
     const params = await startRun();
     await runWorkflow(params);
-    expect(await runRow(params.runId)).toMatchObject({ state: "expired" });
-    expect(await draftRow(params.runId)).toMatchObject({ status: "expired", markdown: null });
+    expect(shared.step.waits[0]).toMatchObject({ type: "approval", outcome: "timeout" });
+    expect(await runRow(params.runId)).toMatchObject({ state: "pending_approval", finishedAt: null });
+    expect(await draftRow(params.runId)).toMatchObject({ status: "pending_approval", stale: true, markdown: "# Article\n\nBody text." });
     expect(shared.sanity.docs.has(`drafts.postauto-${params.runId}`)).toBe(true);
+  });
+
+  it("a stale draft is approved through direct handling: derivatives, then publish", async () => {
+    const params = await startRun();
+    await runWorkflow(params); // times out → stale
+    const draft = (await draftRow(params.runId))!;
+    expect(draft.stale).toBe(true);
+    const status = await approveDirect(env, shared.db, { draft, decision: { action: "approve", publishMode: "now", channels: ["x"] } });
+    expect(status).toBe("published");
+    expect(await draftRow(params.runId)).toMatchObject({ status: "published", markdown: null });
+    expect((await runRow(params.runId))?.state).toBe("published");
+    expect((await derivativeRows(draft.id)).map((d) => [d.kind, d.outcome]).sort()).toEqual([["hero_image", "produced"], ["linkedin", "declined"], ["x", "produced"]]);
+    expect(shared.sanity.docs.has(`postauto-${params.runId}`)).toBe(true);
   });
 });
 

@@ -17,6 +17,9 @@ export async function listDraftsWithDerivatives(db: Db, userId: string) {
       status: schema.drafts.status,
       angle: schema.drafts.angle,
       sanityDocumentId: schema.drafts.sanityDocumentId,
+      stale: schema.drafts.stale,
+      seenAt: schema.drafts.seenAt,
+      channels: schema.drafts.channels,
       publishAt: schema.drafts.publishAt,
       createdAt: schema.drafts.createdAt,
       decidedAt: schema.drafts.decidedAt,
@@ -89,6 +92,9 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
       angle: draft.angle,
       sanityDocumentId: draft.sanityDocumentId,
       blogType: draft.blogType,
+      stale: draft.stale, // spec §5.1: revise / change_angle greyed out; approve / reject still work
+      seenAt: draft.seenAt,
+      channels: draft.channels,
       publishAt: draft.publishAt,
       createdAt: draft.createdAt,
       decidedAt: draft.decidedAt,
@@ -289,4 +295,12 @@ export async function routesUsingModel(db: Db, provider: string, model: string) 
 /** The run's draft (one per run) — how a gate finds what it is applying to. */
 export async function getDraftByRun(db: Db, runId: string) {
   return db.query.drafts.findFirst({ where: eq(schema.drafts.runId, runId), orderBy: desc(schema.drafts.createdAt) });
+}
+
+/** The user's undecided draft, if any — the 1-pending-draft rule (spec §2, FR-7.4). */
+export async function undecidedDraft(db: Db, userId: string) {
+  return db.query.drafts.findFirst({
+    where: and(eq(schema.drafts.userId, userId), inArray(schema.drafts.status, ["pending_approval", "revising"])),
+    orderBy: desc(schema.drafts.createdAt),
+  });
 }

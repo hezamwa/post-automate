@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { GateError } from "../ai/gates";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
-import { getUserById, setRunState } from "../db/commands";
+import { getUserById, markDraftSeen, setRunState } from "../db/commands";
 import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { retractPublished, retractTranslatedEdition } from "../modules/publishing";
@@ -28,8 +28,11 @@ export const drafts = new Hono<AuthedEnv>()
   // Review-screen detail: markdown (the app's editing source of truth until publish,
   // DR-9.11), latest derivatives, and the run's stored angle proposals (FR-7.9).
   .get("/:id", async (c) => {
-    const detail = await getDraftDetail(createDb(c.env), c.get("userId"), c.req.param("id"));
+    const db = createDb(c.env);
+    const detail = await getDraftDetail(db, c.get("userId"), c.req.param("id"));
     if (!detail) return c.json({ error: "draft not found" }, 404);
+    // Spec §5.2: the first open by the owner is recorded — auto-publish and reminders read it.
+    if (!detail.draft.seenAt) await markDraftSeen(db, detail.draft.id);
     return c.json(detail);
   })
 
@@ -38,7 +41,7 @@ export const drafts = new Hono<AuthedEnv>()
   // `channels` is the derivatives gate — ticked on the approve screen (spec §4.1).
   .post("/:id/decision", async (c) => {
     const parsed = approvalSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success || parsed.data.action === "expired") {
+    if (!parsed.success || parsed.data.action === "timeout") {
       const detail = parsed.success ? "" : ` (${parsed.error.issues[0]?.message ?? "invalid body"})`;
       return c.json({ error: `action must be approve|reject|revise|change_angle${detail}` }, 400);
     }
@@ -58,10 +61,18 @@ export const drafts = new Hono<AuthedEnv>()
         .where(eq(schema.draftRevisions.draftId, draft.id));
       if ((n?.n ?? 0) >= 3) return c.json({ error: "revision limit (3) reached — edit manually or reject (FR-7.9)" }, 409);
     }
+    // Spec §5.1: a stale draft has no instance to re-enter — only approve, edit and reject
+    // still work (direct handling); revise and change_angle are greyed out.
+    if (draft.stale && (body.action === "revise" || body.action === "change_angle")) {
+      return c.json(
+        { error: "This draft waited so long that its pipeline run has ended. Revise and change-angle need a live run — approve it (with edits if you like) or reject it instead (spec §5.1)." },
+        409,
+      );
+    }
     const run = await db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, draft.runId) });
 
     // Primary path: the Workflow instance is waiting on the approval event (AR-10.5)
-    if (run?.workflowInstanceId) {
+    if (!draft.stale && run?.workflowInstanceId) {
       try {
         const instance = await c.env.PIPELINE.get(run.workflowInstanceId);
         await instance.sendEvent({ type: DRAFT_EVENT_TYPE, payload: body });

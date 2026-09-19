@@ -1,5 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env } from "../shared/env";
+import { createDb } from "../db/client";
+import { touchLastActive } from "../db/commands";
 import { verifyAccessToken, type AccessClaims } from "./tokens";
 
 // JWT middleware (FR-2.2/2.3/2.5): attaches userId + role; every query downstream is
@@ -21,6 +23,9 @@ export const requireAuth: MiddlewareHandler<AuthedEnv> = async (c, next) => {
   }
   c.set("userId", claims.userId);
   c.set("role", claims.role);
+  // Spec §2: every authenticated app request is activity — it gates scheduled runs and
+  // mutes reminders. One indexed UPDATE per request; two creators, no contention.
+  await touchLastActive(createDb(c.env), claims.userId);
   await next();
 };
 

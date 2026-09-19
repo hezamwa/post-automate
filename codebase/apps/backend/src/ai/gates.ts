@@ -111,8 +111,8 @@ export async function assertAiAllowed(
 
 /**
  * Run-level gate (Workflow "gates" step, design §5/§10): the AI money/rate gates, plus
- * runs-per-day (FR-15.8), plus the pending-drafts pause — which user-requested runs
- * bypass (FR-7.4/7.7). Throws GateError (→ failed) or SkipRunError (→ skipped).
+ * runs-per-day (FR-15.8), plus the 1-pending-draft rule (FR-7.4, spec §2) — user-requested
+ * runs included since v2. Throws GateError (→ failed) or SkipRunError (→ skipped).
  */
 export async function assertRunnable(
   db: Db,
@@ -156,22 +156,23 @@ export async function assertRunnable(
     );
   }
 
-  if (!opts.userRequested) {
-    const [pendingRow] = await db
-      .select({ n: count() })
-      .from(schema.drafts)
-      .where(
-        and(
-          eq(schema.drafts.userId, userId),
-          inArray(schema.drafts.status, ["pending_approval", "revising"]),
-        ),
-      );
-    if ((pendingRow?.n ?? 0) >= 2) {
-      throw new SkipRunError(
-        "2 drafts already awaiting review — run skipped, reminder sent instead (FR-7.4)",
-        "pending_drafts",
-      );
-    }
+  // Spec §2/§3 step 1 (v2): ONE undecided draft is enough to refuse a new run, whoever
+  // asked for it — the money is better spent once the pending draft is decided. The
+  // trigger routes refuse earlier (409 with the draft id); this is the backstop.
+  const [pendingRow] = await db
+    .select({ n: count() })
+    .from(schema.drafts)
+    .where(
+      and(
+        eq(schema.drafts.userId, userId),
+        inArray(schema.drafts.status, ["pending_approval", "revising"]),
+      ),
+    );
+  if ((pendingRow?.n ?? 0) >= 1) {
+    throw new SkipRunError(
+      "A draft is already awaiting review — run skipped, reminder sent instead (FR-7.4, spec §2)",
+      "pending_drafts",
+    );
   }
   return status;
 }

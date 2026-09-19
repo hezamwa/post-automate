@@ -33,6 +33,8 @@ export const runState = pgEnum("run_state", [
   "failed",
 ]);
 export const candidateSource = pgEnum("candidate_source", ["discovered", "user"]);
+// `expired` is LEGACY (v1 7-day timeout, removed in v2 — spec §5 "no expiry"): kept only
+// because historic rows may carry it; nothing writes it any more.
 export const draftStatus = pgEnum("draft_status", [
   "pending_approval",
   "revising",
@@ -78,6 +80,9 @@ export const users = pgTable("users", {
   // refused at login/refresh with the reason, and in the AI/run gates (design §10.1)
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspendedReason: text("suspended_reason"),
+  // Last authenticated app request or decision (spec §2): gates scheduled runs (7 days)
+  // and silences reminders for someone who is clearly around.
+  lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -172,6 +177,11 @@ export const drafts = pgTable("drafts", {
   // The derivatives-gate selection at approval (spec §4.1): ["x","linkedin","translation"]
   // narrowed to what the profile supports. NULL until approved.
   channels: jsonb("channels"),
+  // Spec §5.1: the Workflow instance ended without a decision. A flag, not a status —
+  // the draft stays pending, markdown and Sanity draft kept; approve/reject go direct.
+  stale: boolean("stale").notNull().default(false),
+  // First GET /drafts/:id by the owner (spec §5.2 auto-publish condition, reminder muting).
+  seenAt: timestamp("seen_at", { withTimezone: true }),
   publishAt: timestamp("publish_at", { withTimezone: true }),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

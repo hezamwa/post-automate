@@ -95,7 +95,8 @@ export async function runPipeline(env: Env, step: WorkflowStep, params: Pipeline
         }, "reject");
         return;
       default:
-        await runStep(step, ctx, record, { outcome: "expired", draftId }, "expire");
+        // the instance's wait ran out: the draft is flagged stale, never expired (spec §5.1)
+        await runStep(step, ctx, record, { outcome: "stale", draftId }, "stale");
         return;
     }
   } catch (e) {
