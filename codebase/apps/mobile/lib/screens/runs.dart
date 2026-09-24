@@ -20,11 +20,15 @@ class RunsScreenState extends State<RunsScreen> {
   List<RunSummary>? _runs;
   String? _error;
   bool _busy = false;
+  bool _medical = false; // FR-6.20: hides the critical mood
 
   @override
   void initState() {
     super.initState();
     reload();
+    ApiClient.instance.get('/profile').then((p) {
+      if (mounted) setState(() => _medical = p['medical'] == true);
+    }, onError: (_) {});
   }
 
   Future<void> reload() async {
@@ -66,7 +70,7 @@ class RunsScreenState extends State<RunsScreen> {
   }
 
   Future<void> _generate() async {
-    final mood = await moodDialog(context);
+    final mood = await moodDialog(context, hideCritical: _medical);
     if (mood == null) return;
     await _act(() async {
       final res = await ApiClient.instance.post('/runs/trigger', {'mood': mood});
@@ -77,7 +81,7 @@ class RunsScreenState extends State<RunsScreen> {
   }
 
   Future<void> _requestTopic() async {
-    final body = await topicRequestDialog(context);
+    final body = await topicRequestDialog(context, hideCritical: _medical);
     if (body == null) return;
     await _act(() async {
       try {

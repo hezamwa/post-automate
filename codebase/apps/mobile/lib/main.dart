@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'screens/drafts.dart';
 import 'screens/login.dart';
+import 'screens/profile.dart';
 import 'screens/runs.dart';
 
 // Thin client (DR-9.7): the backend does everything; this app renders queues and
@@ -69,7 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_tab == 0 ? 'Drafts' : 'Runs'),
+        title: Text(const ['Drafts', 'Runs', 'Profile'][_tab]),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 4),
@@ -90,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: IndexedStack(
         index: _tab,
-        children: const [DraftsScreen(), RunsScreen()],
+        children: const [DraftsScreen(), RunsScreen(), ProfileScreen()],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -98,6 +99,7 @@ class _HomeScreenState extends State<HomeScreen> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.article_outlined), label: 'Drafts'),
           NavigationDestination(icon: Icon(Icons.autorenew), label: 'Runs'),
+          NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
         ],
       ),
     );

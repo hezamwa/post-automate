@@ -138,6 +138,8 @@ export const profileSchema = z
     // article-workflow §4.1 — per-gate ask|auto; §2 — scheduled runs only for opted-in creators.
     gates: gatesSchema.default({}),
     autoRun: z.boolean().default(false),
+    // FR-3.14 (OD-27): when approved channel texts are posted — confirm (tap Post) or auto.
+    socialPosting: z.enum(["confirm", "auto"]).default("confirm"),
   })
   // design §4 specifies "additionalProperties": false throughout. Strict, not stripping:
   // an invented field — especially from the interview's structured output (FR-4.2) —
