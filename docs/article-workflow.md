@@ -28,7 +28,7 @@ alive across every gate; if it times out at the draft gate, the draft survives i
 | Auto-publish | — | admin-only flag, default off, blocked for medical profiles |
 | Step granularity | some steps bundle 2–3 billable calls | **one billable call per step** — a failed call never re-bills a successful one |
 | Mood *(2026-09-24)* | — | chosen per article at **Generate** / **My topic**; `normal` by default (§2) |
-| Social *(2026-09-24)* | texts stored for manual posting | **posted to X and LinkedIn** once the article is live — text, then the link as a reply / first comment (§6.1) |
+| Social *(2026-09-24)* | texts stored for manual posting | **posted to X and LinkedIn** once the article is live — X: text, then the link as a reply; LinkedIn: text with the link as its last line (§6.1) |
 
 ---
 
@@ -327,7 +327,7 @@ Publishing only ever happens in the production Worker (FR-8.5).
 At the end of `publishApprovedDraft`, after the article and its translated edition are live,
 each channel that was ticked and produced gets a `social_posts` row. With the profile's
 `socialPosting = auto` it posts right away: the approved text alone, then the article link as a
-**reply on X** / **first comment on LinkedIn**. With `confirm` (the default) the draft shows
+**reply on X**, and as the **last line of the post on LinkedIn**. With `confirm` (the default) the draft shows
 **Post** per channel. An unconnected account records *not connected*; a failure records the
 reason and never touches the article; **Retry** posts only what is missing. Retract deletes the
 posts too. Production only; held by `publishing.paused`. Detail: [design §17](design.md).

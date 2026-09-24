@@ -57,8 +57,8 @@ export async function postChannel(env: Env, db: Db, args: { draftId: string; cha
     if (!link) throw new Error("the published article has no slug or language to link to");
     const url = articleUrl(user.sanityProjectId, user.siteUrl, { ...link, blogType: draft.blogType ?? link.blogType });
     const api = channelApi(env, channel, f);
-    if (!row.postId) row = await patchPostRow(db, row.id, await api.post(conn, text)); // written at once: a retry never re-posts
-    if (!row.replyId) row = await patchPostRow(db, row.id, { replyId: await api.addLink(conn, row.postId!, url) });
+    if (!row.postId) row = await patchPostRow(db, row.id, await api.post(conn, text, url)); // written at once: a retry never re-posts
+    if (!row.replyId && !api.linkInPost) row = await patchPostRow(db, row.id, { replyId: await api.addLink(conn, row.postId!, url) });
     return await patchPostRow(db, row.id, { status: "posted", reason: null, postedAt: new Date() });
   } catch (e) {
     return patchPostRow(db, row.id, { status: "failed", reason: e instanceof Error ? e.message.slice(0, 500) : "posting failed" });

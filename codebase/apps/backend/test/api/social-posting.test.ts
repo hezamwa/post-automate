@@ -80,14 +80,15 @@ describe("auto mode, from publishApprovedDraft", () => {
     expect(await rowsOf(draftId)).toMatchObject([{ channel: "x", status: "posted", postId: "t1", replyId: "t2", postUrl: "https://x.com/waleed/status/t1" }]);
   });
 
-  it("LinkedIn: escaped commentary, the link as the first comment on the post URN", async () => {
+  it("LinkedIn: one post — escaped text, the article link on its last line, no comment", async () => {
     const { calls } = platforms();
     const { draftId } = await publishedDraft({ mode: "auto", connect: ["linkedin"] });
     await queueSocialPosts(env(), shared.db, draftId);
-    const [post, comment] = calls;
-    expect(post).toMatchObject({ url: "https://api.linkedin.com/rest/posts", body: { author: "urn:li:person:linkedin-id", commentary: "LinkedIn \\(long\\) text" } });
-    expect(comment!.url).toBe(`https://api.linkedin.com/rest/socialActions/${encodeURIComponent("urn:li:share:1")}/comments`);
-    expect(comment!.body).toMatchObject({ object: "urn:li:share:1", message: { text: "https://waleedalhezam.sa/en/blog/ai-tools" } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "https://api.linkedin.com/rest/posts",
+      body: { author: "urn:li:person:linkedin-id", commentary: "LinkedIn \\(long\\) text\n\nhttps://waleedalhezam.sa/en/blog/ai-tools" },
+    });
     const rows = await rowsOf(draftId);
     expect(rows.find((r) => r.channel === "linkedin")).toMatchObject({ status: "posted", postUrl: "https://www.linkedin.com/feed/update/urn:li:share:1/" });
     expect(rows.find((r) => r.channel === "x")).toMatchObject({ status: "not_connected" });

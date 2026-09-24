@@ -1178,16 +1178,19 @@ translated edition are live, best-effort, never rolling anything back:
 2. No connection (or an expired one) → `not_connected`. Profile `socialPosting = confirm` →
    `awaiting_confirm`. Otherwise post now.
 3. **Post**: refresh the token if it expires within a minute (persisting a rotated refresh
-   token), post the text, **write `post_id` and `post_url` immediately**, then post the link —
-   an X reply (`reply.in_reply_to_tweet_id`) or a LinkedIn comment
-   (`/rest/socialActions/{urn}/comments`) — and write `reply_id`. A failure after the post
-   leaves `post_id` set and status `failed`; the retry posts only the reply.
+   token), post the text, **write `post_id` and `post_url` immediately**. On X the link then
+   follows as a reply (`reply.in_reply_to_tweet_id`) and `reply_id` is written; a failure
+   after the post leaves `post_id` set and status `failed`, and the retry posts only the
+   reply. On LinkedIn the link is the post's **last line** — one call, no comment:
+   `/rest/socialActions/{urn}/comments` needs the partner-only Community Management API
+   (found in the first live test, 2026-09-24).
 4. Guards, checked on every attempt: production Worker only (FR-8.5), `publishing.paused`
    holds (FR-18.4), and a missing `users.site_url` fails with that reason (FR-18.8).
 
 Text rules: X text is the approved ≤280-char version; the reply is the article URL alone.
-LinkedIn commentary is escaped for LinkedIn's "little text" format, with `#tag` rewritten as a
-hashtag template so hashtags stay clickable; the first comment is the URL alone. The
+LinkedIn commentary is the approved text, a blank line, then the URL — the text trimmed with
+"…" if both would pass 3,000 characters — escaped for LinkedIn's "little text" format, with
+`#tag` rewritten as a hashtag template so hashtags stay clickable. The
 `LinkedIn-Version` header comes from `LINKEDIN_API_VERSION` (default in code) — LinkedIn
 retires versions after about a year, so bump it when the API starts refusing.
 
@@ -1197,7 +1200,7 @@ are the same call. An auto post that fails sends one push (§9).
 ### Retract and expiry (FR-18.6–18.7)
 
 Retract deletes each `posted` row's post on the platform — on X the link reply too, since it
-is its own tweet; a LinkedIn comment goes with its post — and marks it `deleted`; a failed deletion stays `posted` with the reason, and the retract response
+is its own tweet — and marks it `deleted`; a failed deletion stays `posted` with the reason, and the retract response
 names it. The daily dispatcher pushes "Reconnect LinkedIn" once when a connection without a
 refresh token is within 7 days of `expires_at` (`expiry_reminded_at` stops repeats; a
 reconnect clears it).
@@ -1208,4 +1211,7 @@ The endpoints above are from each platform's current public docs as of 2026-09. 
 the first live post: the X app's plan allows `POST /2/tweets` for both users; the LinkedIn app
 has **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn** products; that
 `w_member_social` covers comments on the member's own post; and that `LINKEDIN_API_VERSION` is
-an active version.
+an active version. *(First live test, 2026-09-24: LinkedIn posting works with Share on
+LinkedIn; comments do not — hence the link on the post's last line. X answered 403 "You are
+not permitted to perform this action" with `tweet.write` granted — an X account/app/plan
+setting, still open.)*

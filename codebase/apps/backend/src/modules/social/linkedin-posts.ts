@@ -1,10 +1,13 @@
 import { expectOk, SocialApiError, type Fetcher } from "./types";
 
-// LinkedIn posting (FR-18.2, design §17): the post on the member's feed, the link as its
-// first comment, and deletion — the versioned REST API.
+// LinkedIn posting (FR-18.2, design §17): the post on the member's feed (the article link
+// on its last line) and deletion — the versioned REST API. linkedinComment stays for the
+// first-comment design, usable only once the app has the Community Management API.
 
 /** YYYYMM. LinkedIn retires a version after about a year — override with LINKEDIN_API_VERSION. */
 export const DEFAULT_LINKEDIN_VERSION = "202607";
+/** The commentary limit — the approved text plus the link must fit (FR-6.12). */
+export const LINKEDIN_MAX_POST_CHARS = 3000;
 const REST = "https://api.linkedin.com/rest";
 
 const headers = (accessToken: string, version: string) => ({
