@@ -37,6 +37,20 @@ export async function saveConnection(
     .onConflictDoUpdate({ target: [schema.socialAccounts.userId, schema.socialAccounts.provider], set: values });
 }
 
+/** After a refresh: new sealed tokens and expiry; the connection itself is unchanged. */
+export async function updateTokens(env: Env, db: Db, rowId: string, tokens: TokenSet & { refreshToken: string }): Promise<void> {
+  await db
+    .update(schema.socialAccounts)
+    .set({
+      accessTokenEnc: await seal(env.SOCIAL_TOKEN_KEY, tokens.accessToken),
+      refreshTokenEnc: await seal(env.SOCIAL_TOKEN_KEY, tokens.refreshToken),
+      expiresAt: at(tokens.expiresIn)!,
+      ...(tokens.refreshExpiresIn != null ? { refreshExpiresAt: at(tokens.refreshExpiresIn) } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.socialAccounts.id, rowId));
+}
+
 /** A refresh token keeps a connection alive past its access-token expiry. */
 export function connectionState(row: Pick<Row, "expiresAt" | "refreshTokenEnc" | "refreshExpiresAt">, now = new Date()): ConnectionState {
   const until = row.refreshTokenEnc ? (row.refreshExpiresAt ?? null) : row.expiresAt;

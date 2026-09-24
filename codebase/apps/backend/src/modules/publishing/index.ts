@@ -5,6 +5,7 @@ import type { Profile } from "@post-automate/shared";
 import { GateError } from "../../ai/gates";
 import { schema, type Db } from "../../db/client";
 import { getFlags } from "../../shared/flags";
+import { queueSocialPosts } from "../social/post";
 import type { Env } from "../../shared/env";
 import type { Article, DerivedTexts } from "../generation";
 import {
@@ -166,6 +167,13 @@ export async function publishApprovedDraft(
     await publishTranslatedEdition(env, db, target, { draftId: args.draftId, runId: row.runId, publishedId, blogType: row.blogType });
   } catch (e) {
     console.warn("translated edition publish failed — primary is live:", e instanceof Error ? e.message : e);
+  }
+  // FR-18.2–18.3 (design §17): the approved channel texts, once everything is live — same
+  // best-effort rule. Each channel records its own outcome.
+  try {
+    await queueSocialPosts(env, db, args.draftId);
+  } catch (e) {
+    console.warn("social posting failed — the article is live:", e instanceof Error ? e.message : e);
   }
   return publishedId;
 }

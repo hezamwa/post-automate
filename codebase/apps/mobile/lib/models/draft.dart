@@ -40,6 +40,22 @@ class DraftSummary {
       );
 }
 
+/// FR-18.5: one channel's social post — awaiting_confirm | posted | failed | not_connected | deleted.
+class SocialPost {
+  SocialPost({required this.channel, required this.status, this.postUrl, this.reason});
+  final String channel; // x | linkedin
+  final String status;
+  final String? postUrl;
+  final String? reason;
+
+  factory SocialPost.fromJson(Map<String, dynamic> json) => SocialPost(
+        channel: json['channel'] as String,
+        status: json['status'] as String,
+        postUrl: json['postUrl'] as String?,
+        reason: json['reason'] as String?,
+      );
+}
+
 /// Spec §3 step 8: the quality-check verdict shown on the review screen.
 class QualityCheck {
   QualityCheck({required this.passed, required this.autoRevised, required this.findings});
@@ -74,6 +90,7 @@ class DraftDetail {
     this.autoPublish = false,
     this.autoPublishWarnedAt,
     this.autoPublishHeldAt,
+    this.socialPosts = const [],
   });
   final DraftSummary summary;
   final String? markdown; // null after publish/reject (purged, DR-9.11)
@@ -87,6 +104,7 @@ class DraftDetail {
   final bool autoPublish; // spec §5.2: admin flag, read-only for the creator
   final DateTime? autoPublishWarnedAt;
   final DateTime? autoPublishHeldAt;
+  final List<SocialPost> socialPosts;
 
   factory DraftDetail.fromJson(Map<String, dynamic> json) {
     final draft = json['draft'] as Map<String, dynamic>;
@@ -108,6 +126,9 @@ class DraftDetail {
       autoPublish: json['autoPublish'] == true,
       autoPublishWarnedAt: _date(draft['autoPublishWarnedAt']),
       autoPublishHeldAt: _date(draft['autoPublishHeldAt']),
+      socialPosts: ((json['socialPosts'] as List<dynamic>?) ?? [])
+          .map((p) => SocialPost.fromJson(p as Map<String, dynamic>))
+          .toList(),
     );
   }
 

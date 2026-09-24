@@ -7,6 +7,7 @@ import '../widgets/draft/decision_dialogs.dart';
 import '../widgets/draft/derivative_tile.dart';
 import '../widgets/draft/draft_actions.dart';
 import '../widgets/draft/review_panels.dart';
+import '../widgets/draft/social_panel.dart';
 import '../widgets/gates/publish_gate.dart';
 
 /// Review screen (design §15, spec §5): the article, quality findings, channel outcomes,
@@ -92,8 +93,26 @@ class _DraftDetailScreenState extends State<DraftDetailScreen> {
     if (category != null) await _decide({'action': 'reject', 'rejectionCategory': category}, 'Rejected — draft removed.');
   }
 
+  /// FR-7.6 + FR-18.6: the article and its channel posts come down; any post that could not
+  /// be deleted is named so the creator can remove it by hand.
+  Future<void> _retract() => _act(() async {
+        final res = await ApiClient.instance.post('/drafts/${widget.draftId}/retract');
+        final left = ((res['socialNotDeleted'] as List<dynamic>?) ?? []).cast<Map<String, dynamic>>();
+        if (!mounted) return;
+        _snack(left.isEmpty
+            ? 'Retracted (FR-7.6).'
+            : 'Retracted, but delete these yourself: ${left.map((l) => '${l['channel']} — ${l['reason']}').join('; ')}');
+      }, pop: true);
+
   Future<void> _post(String path, String done, {bool pop = false}) =>
       _act(() => ApiClient.instance.post('/drafts/${widget.draftId}/$path'), done: done, pop: pop);
+
+  /// FR-18.3/18.5: post (confirm mode) or retry one channel — the same call.
+  Future<void> _postSocial(String channel) => _act(() async {
+        final res = await ApiClient.instance.post('/drafts/${widget.draftId}/social/$channel');
+        final post = res['post'] as Map<String, dynamic>;
+        if (mounted && post['status'] != 'posted') _snack('${post['reason'] ?? 'Not posted.'}');
+      });
 
   Future<void> _answerPublish(Map<String, dynamic> body) => _act(
       () => ApiClient.instance.post('/runs/${_detail!.summary.runId}/gates/publish', body),
@@ -120,6 +139,7 @@ class _DraftDetailScreenState extends State<DraftDetailScreen> {
           if (detail.canHoldAutoPublish) AutoPublishBanner(busy: _busy, onHold: () => _post('hold', 'Held.')),
           if (reviewable && s.stale) const StaleNotice(),
           if (reviewable && detail.quality != null) QualityPanel(quality: detail.quality!),
+          if (detail.socialPosts.isNotEmpty) SocialPanel(posts: detail.socialPosts, busy: _busy, onPost: _postSocial),
           if (s.derivatives.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text('Channels', style: titles.titleMedium),
@@ -151,7 +171,7 @@ class _DraftDetailScreenState extends State<DraftDetailScreen> {
         onChangeAngle: _changeAngle,
         onReject: _reject,
         onCancelSchedule: () => _post('cancel-schedule', 'Back to pending review (FR-7.8).'),
-        onRetract: () => _post('retract', 'Retracted (FR-7.6).', pop: true),
+        onRetract: _retract,
       ),
     );
   }

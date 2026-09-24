@@ -11,6 +11,7 @@ interface UserRow {
   displayName: string;
   role: string;
   sanityProjectId: string | null;
+  siteUrl: string | null;
   suspendedAt: string | null;
   suspendedReason: string | null;
 }
@@ -66,6 +67,15 @@ export function UsersView({ selfId }: { selfId: string }) {
       await reload();
     });
 
+  // FR-18.8: the live site's base URL — the article link in the user's social posts
+  const setSiteUrl = (u: UserRow) =>
+    act(`site-${u.id}`, async () => {
+      const value = prompt(`Site URL for ${u.displayName} (https://…, empty to clear):`, u.siteUrl ?? "");
+      if (value === null) return;
+      await api(`/admin/users/${u.id}`, { method: "PATCH", body: JSON.stringify({ siteUrl: value.trim() || null }) });
+      await reload();
+    });
+
   const openLimits = (u: UserRow) =>
     act(`limits-${u.id}`, async () => {
       const res = await api<LimitsState>(`/admin/users/${u.id}/limits`);
@@ -112,7 +122,7 @@ export function UsersView({ selfId }: { selfId: string }) {
         <h2>Users (FR-2.5)</h2>
         <table>
           <thead>
-            <tr><th>Name</th><th>Email</th><th>Role</th><th>Sanity</th><th>Status</th><th /></tr>
+            <tr><th>Name</th><th>Email</th><th>Role</th><th>Sanity</th><th>Site URL</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
             {users.map((u) => (
@@ -121,6 +131,7 @@ export function UsersView({ selfId }: { selfId: string }) {
                 <td>{u.email}</td>
                 <td>{u.role}</td>
                 <td className="muted">{u.sanityProjectId ?? "—"}</td>
+                <td className="muted">{u.siteUrl ?? "—"}</td>
                 <td>
                   {u.suspendedAt
                     ? <span className="pill bad" title={u.suspendedReason ?? ""}>suspended</span>
@@ -128,6 +139,7 @@ export function UsersView({ selfId }: { selfId: string }) {
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button disabled={busy === `limits-${u.id}`} onClick={() => void openLimits(u)}>Limits</button>{" "}
+                  <button disabled={busy === `site-${u.id}`} onClick={() => void setSiteUrl(u)}>Site URL</button>{" "}
                   {u.suspendedAt ? (
                     <button disabled={busy === u.id} onClick={() => void reactivate(u)}>Reactivate</button>
                   ) : (

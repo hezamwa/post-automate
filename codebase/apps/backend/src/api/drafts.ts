@@ -8,6 +8,8 @@ import { getDraftDetail, listDraftsWithDerivatives } from "../db/queries";
 import { dropDraftTranslation, translateDraft } from "../modules/generation";
 import { retractPublished, retractTranslatedEdition } from "../modules/publishing";
 import { getActiveProfile } from "../modules/profiles";
+import { deleteSocialPosts } from "../modules/social/post";
+import { postsForDraft, postView } from "../modules/social/records";
 import { approveDirect, rejectDirect, runContextFor } from "../workflows/direct";
 import { derivativesGate } from "../workflows/gates/derivatives";
 import { approvalSchema, DRAFT_EVENT_TYPE } from "../workflows/gates/draft";
@@ -45,7 +47,8 @@ export const drafts = new Hono<AuthedEnv>()
       : null;
     // Spec §5.2: read-only for the creator — the admin flag, and this draft's warning/hold state.
     const limits = await db.query.userLimits.findFirst({ where: eq(schema.userLimits.userId, c.get("userId")) });
-    return c.json({ ...detail, gates, autoPublish: limits?.autoPublish ?? false });
+    const socialPosts = (await postsForDraft(db, detail.draft.id)).map(postView); // FR-18.5
+    return c.json({ ...detail, gates, autoPublish: limits?.autoPublish ?? false, socialPosts });
   })
 
   // {action: approve|reject|revise|change_angle, editedMarkdown?, publishMode?, channels?,
@@ -222,9 +225,10 @@ export const drafts = new Hono<AuthedEnv>()
     const target = { projectId: user.sanityProjectId!, dataset: user.sanityDataset };
     await retractPublished(c.env, target, draft.sanityDocumentId);
     await retractTranslatedEdition(c.env, db, target, { id: draft.id, runId: draft.runId }); // FR-7.6 covers both editions
+    const socialNotDeleted = await deleteSocialPosts(c.env, db, draft.id); // FR-18.6, best-effort
     await db
       .update(schema.drafts)
       .set({ status: "retracted", sanityDocumentId: `drafts.${draft.sanityDocumentId}` })
       .where(eq(schema.drafts.id, draft.id));
-    return c.json({ ok: true, nowDraft: `drafts.${draft.sanityDocumentId}` });
+    return c.json({ ok: true, nowDraft: `drafts.${draft.sanityDocumentId}`, socialNotDeleted });
   });

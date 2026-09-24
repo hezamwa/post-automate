@@ -37,6 +37,10 @@ void main() {
         'publish': {'setting': 'ask'},
       },
       'autoPublish': true,
+      'socialPosts': [
+        {'channel': 'x', 'status': 'posted', 'postUrl': 'https://x.com/w/status/1'},
+        {'channel': 'linkedin', 'status': 'not_connected', 'reason': 'connect it'},
+      ],
     });
     expect(d.summary.gate, 'publish');
     expect(d.summary.stale, isTrue);
@@ -46,6 +50,8 @@ void main() {
     expect(d.quality!.findings.where((f) => !f.ok).single.check, 'length');
     expect(d.canHoldAutoPublish, isTrue);
     expect(d.summary.derivatives.where((x) => x.isIssue), isEmpty); // declined is a choice
+    expect(d.socialPosts.map((p) => p.status), ['posted', 'not_connected']);
+    expect(d.socialPosts.last.reason, 'connect it');
   });
 
   test('run detail: waiting gate, outline sections, draft id', () {

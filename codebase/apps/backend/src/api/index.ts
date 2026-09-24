@@ -3,6 +3,7 @@ import type { Env } from "../shared/env";
 import { auth } from "./auth";
 import { onboarding } from "./onboarding";
 import { drafts } from "./drafts";
+import { draftSocial } from "./draft-social";
 import { me } from "./me";
 import { profile } from "./profile";
 import { social } from "./social";
@@ -18,6 +19,7 @@ export const api = new Hono<{ Bindings: Env }>()
   .route("/me", me)
   .route("/social", social)
   .route("/drafts", drafts)
+  .route("/drafts", draftSocial)
   .route("/runs", runs)
   .route("/admin", admin)
   .route("/webhooks", webhooks);

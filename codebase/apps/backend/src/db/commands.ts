@@ -171,6 +171,7 @@ export async function deleteUserCascade(
       await tx.delete(schema.editDiffs).where(inArray(schema.editDiffs.draftId, draftIds));
       await tx.delete(schema.draftRevisions).where(inArray(schema.draftRevisions.draftId, draftIds));
       await tx.delete(schema.draftDerivatives).where(inArray(schema.draftDerivatives.draftId, draftIds));
+      await tx.delete(schema.socialPosts).where(inArray(schema.socialPosts.draftId, draftIds));
     }
     await tx.delete(schema.drafts).where(eq(schema.drafts.userId, userId));
     await tx.delete(schema.topicCandidates).where(eq(schema.topicCandidates.userId, userId));

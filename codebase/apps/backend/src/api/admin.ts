@@ -413,6 +413,7 @@ export const admin = new Hono<AuthedEnv>()
         role: schema.users.role,
         sanityProjectId: schema.users.sanityProjectId,
         sanityDataset: schema.users.sanityDataset,
+        siteUrl: schema.users.siteUrl,
         suspendedAt: schema.users.suspendedAt,
         suspendedReason: schema.users.suspendedReason,
         createdAt: schema.users.createdAt,
@@ -459,6 +460,19 @@ export const admin = new Hono<AuthedEnv>()
   })
   // FR-2.6 right to erasure — personal rows cascade, spend anonymizes, published content
   // stays (an editorial decision, not an automatic one)
+  // FR-18.8: the live site's base URL — data, not code — for article links in social posts.
+  .patch("/users/:id", async (c) => {
+    const parsed = z.object({ siteUrl: z.string().url().startsWith("https://").nullable() }).strict().safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: `siteUrl: ${parsed.error.issues[0]?.message ?? "invalid"} (an https:// URL, or null)` }, 400);
+    const db = createDb(c.env);
+    const [row] = await db
+      .update(schema.users)
+      .set({ siteUrl: parsed.data.siteUrl?.replace(/\/+$/, "") ?? null })
+      .where(eq(schema.users.id, c.req.param("id")))
+      .returning({ id: schema.users.id, siteUrl: schema.users.siteUrl });
+    if (!row) return c.json({ error: "user not found" }, 404);
+    return c.json({ ok: true, user: row });
+  })
   .delete("/users/:id", async (c) => {
     const id = c.req.param("id");
     if (id === c.get("userId")) return c.json({ error: "You cannot delete your own account." }, 400);

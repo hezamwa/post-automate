@@ -78,6 +78,9 @@ export const users = pgTable("users", {
   // the Worker resolves the token secret as SANITY_TOKEN_<PROJECTID>
   sanityProjectId: text("sanity_project_id"),
   sanityDataset: text("sanity_dataset").notNull().default("production"),
+  // The live site's base URL, e.g. https://afnanalmass.sa — the article link in social
+  // posts (FR-18.8). Data, not code: an admin sets it; NULL fails posting with that reason.
+  siteUrl: text("site_url"),
   // NULL = active. Reversible suspend (FR-2.7) — an account state, NOT a $0 spend cap:
   // refused at login/refresh with the reason, and in the AI/run gates (design §10.1)
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
@@ -428,3 +431,25 @@ export const oauthStates = pgTable("oauth_states", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// FR-18.5 / DR-9.18: one record per draft and channel. post_id is written the moment the
+// post succeeds, so a retry only adds the missing link reply — never a second post.
+export const socialPostStatus = pgEnum("social_post_status", ["awaiting_confirm", "posted", "failed", "not_connected", "deleted"]);
+export const socialPosts = pgTable(
+  "social_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id").notNull().references(() => drafts.id),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    channel: socialProvider("channel").notNull(),
+    status: socialPostStatus("status").notNull(),
+    postId: text("post_id"), // tweet id / LinkedIn post URN
+    replyId: text("reply_id"), // the link reply (X) / first comment (LinkedIn)
+    postUrl: text("post_url"),
+    reason: text("reason"), // human-readable, for failed / not_connected / a failed delete
+    postedAt: timestamp("posted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("social_posts_draft_channel").on(t.draftId, t.channel)],
+);

@@ -1196,8 +1196,8 @@ are the same call. An auto post that fails sends one push (§9).
 
 ### Retract and expiry (FR-18.6–18.7)
 
-Retract deletes each `posted` row's post on the platform (the reply/comment goes with it) and
-marks it `deleted`; a failed deletion stays `posted` with the reason, and the retract response
+Retract deletes each `posted` row's post on the platform — on X the link reply too, since it
+is its own tweet; a LinkedIn comment goes with its post — and marks it `deleted`; a failed deletion stays `posted` with the reason, and the retract response
 names it. The daily dispatcher pushes "Reconnect LinkedIn" once when a connection without a
 refresh token is within 7 days of `expires_at` (`expiry_reminded_at` stops repeats; a
 reconnect clears it).
