@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
 import { createRun } from "../db/commands";
-import { gateChoicesForRun, undecidedDraft } from "../db/queries";
+import { gateChoicesForRun, getDraftByRun, undecidedDraft } from "../db/queries";
 import { checkTopicRequest } from "../modules/discovery";
 import { getActiveProfile } from "../modules/profiles";
 import { getFlags } from "../shared/flags";
@@ -175,6 +175,8 @@ export const runs = new Hono<AuthedEnv>()
     const { workflowInstanceId: _instance, ...row } = run;
     return c.json({
       run: row,
+      // the run's draft, once saved — the app opens it for the publish gate (design §15)
+      draftId: (await getDraftByRun(db, run.id))?.id ?? null,
       gate: run.gate ? { name: run.gate, ...(options ?? {}) } : null,
       choices: (await gateChoicesForRun(db, run.id)).map((g) => ({ gate: g.gate, choice: g.choice, freeText: g.freeText, source: g.source, chosenAt: g.chosenAt })),
     });

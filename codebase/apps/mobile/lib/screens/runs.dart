@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../models.dart';
+import '../widgets/topic_request_dialog.dart';
+import 'draft_detail.dart';
+import 'run_detail.dart';
 
-/// Runs: history + "run discovery now" + request-a-topic (FR-5.8, with the FR-7.7
-/// banned-topic warn/override flow) + the 3-angle picker for parked user runs (FR-6.3).
+/// Runs: history + **Generate** + "My topic" (FR-5.8, FR-7.7 override). A run waiting on a
+/// gate opens its gate screen (spec §4); a busy Generate opens the waiting draft (spec §2).
 class RunsScreen extends StatefulWidget {
   const RunsScreen({super.key});
 
@@ -27,9 +30,7 @@ class RunsScreenState extends State<RunsScreen> {
     try {
       final res = await ApiClient.instance.get('/runs');
       setState(() {
-        _runs = (res['runs'] as List<dynamic>)
-            .map((r) => RunSummary.fromJson(r as Map<String, dynamic>))
-            .toList();
+        _runs = (res['runs'] as List<dynamic>).map((r) => RunSummary.fromJson(r as Map<String, dynamic>)).toList();
         _error = null;
       });
     } on ApiException catch (e) {
@@ -37,8 +38,12 @@ class RunsScreenState extends State<RunsScreen> {
     }
   }
 
-  void _snack(String message) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  void _snack(String message) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+
+  Future<void> _open(Widget screen) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+    await reload();
+  }
 
   Future<void> _act(Future<void> Function() fn) async {
     setState(() => _busy = true);
@@ -46,114 +51,46 @@ class RunsScreenState extends State<RunsScreen> {
       await fn();
       await reload();
     } on ApiException catch (e) {
-      if (mounted) _snack(e.message);
+      // Spec §2: one undecided draft at a time — Generate opens it instead of starting a run.
+      final existing = e.body?['existingDraftId'] as String?;
+      if (e.status == 409 && existing != null && mounted) {
+        _snack('Finish the draft that is waiting for you first.');
+        await _open(DraftDetailScreen(draftId: existing));
+      } else if (mounted) {
+        _snack(e.message);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _trigger() => _act(() async {
-        await ApiClient.instance.post('/runs/trigger');
-        if (mounted) _snack('Run started — discovery is finding topics.');
+  Future<void> _generate() => _act(() async {
+        final res = await ApiClient.instance.post('/runs/trigger');
+        if (!mounted) return;
+        _snack('Generating — finding what is trending for you.');
+        await _open(RunDetailScreen(runId: res['runId'] as String));
       });
 
   Future<void> _requestTopic() async {
-    final title = TextEditingController();
-    final notes = TextEditingController();
-    final links = TextEditingController();
-    final submitted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Write about my topic (FR-5.8)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: title, decoration: const InputDecoration(labelText: 'Topic title'), autofocus: true),
-            TextField(controller: notes, decoration: const InputDecoration(labelText: 'Notes (optional)'), maxLines: 2),
-            TextField(
-                controller: links,
-                decoration: const InputDecoration(labelText: 'Source links, one per line (optional)'),
-                maxLines: 2),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Request')),
-        ],
-      ),
-    );
-    if (submitted != true || title.text.trim().isEmpty) return;
-
-    final body = <String, dynamic>{
-      'title': title.text.trim(),
-      if (notes.text.trim().isNotEmpty) 'notes': notes.text.trim(),
-      if (links.text.trim().isNotEmpty)
-        'links': links.text.trim().split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList(),
-    };
+    final body = await topicRequestDialog(context);
+    if (body == null) return;
     await _act(() async {
       try {
-        final res = await ApiClient.instance.post('/runs/request', body);
-        final similar =
-            ((res['warnings'] as Map<String, dynamic>?)?['similarRecentTopics'] as List<dynamic>?) ?? [];
-        if (mounted) {
-          _snack(similar.isEmpty
-              ? 'Run started — you will pick from 3 angles once research is done.'
-              : 'Run started. Heads-up: similar to recent "${similar.first}" (FR-5.7).');
-        }
+        await _startTopic(body);
       } on ApiException catch (e) {
-        // FR-7.7: banned-topic collision → explicit override required
-        if (e.status == 409 && e.body?['requiresOverride'] == true) {
-          if (!mounted) return;
-          final override = await showDialog<bool>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Banned-topic collision (FR-7.7)'),
-              content: Text(e.message),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                FilledButton(
-                    onPressed: () => Navigator.pop(context, true), child: const Text('Override and proceed')),
-              ],
-            ),
-          );
-          if (override == true) {
-            await ApiClient.instance.post('/runs/request', {...body, 'overrideBannedTopics': true});
-            if (mounted) _snack('Run started with the banned-topic override.');
-          }
-        } else {
-          rethrow;
-        }
+        if (e.status != 409 || e.body?['requiresOverride'] != true) rethrow;
+        if (!mounted || !await bannedTopicOverrideDialog(context, e.message)) return;
+        await _startTopic({...body, 'overrideBannedTopics': true});
       }
     });
   }
 
-  Future<void> _pickAngle(RunSummary run) async {
-    final index = await showDialog<int>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Pick the angle (FR-6.3)'),
-        children: [
-          for (var i = 0; i < run.angleProposals.length; i++)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, i),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('${run.angleProposals[i]['headline']}',
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text('${run.angleProposals[i]['thesis'] ?? ''}',
-                      style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-    if (index == null) return;
-    await _act(() async {
-      await ApiClient.instance.post('/runs/${run.id}/angle', {'angleIndex': index});
-      if (mounted) _snack('Angle chosen — writing the article.');
-    });
+  Future<void> _startTopic(Map<String, dynamic> body) async {
+    final res = await ApiClient.instance.post('/runs/request', body);
+    final similar = ((res['warnings'] as Map<String, dynamic>?)?['similarRecentTopics'] as List<dynamic>?) ?? [];
+    if (!mounted) return;
+    _snack(similar.isEmpty ? 'Researching your topic.' : 'Started. Heads-up: similar to recent "${similar.first}" (FR-5.7).');
+    await _open(RunDetailScreen(runId: res['runId'] as String));
   }
 
   @override
@@ -173,37 +110,34 @@ class RunsScreenState extends State<RunsScreen> {
             return ListTile(
               title: Text(r.topicTitle ?? '${r.trigger} run'),
               subtitle: Text(
-                '${r.state}${r.error != null ? ' — ${r.error}' : ''}\n'
+                '${r.awaitsInput ? 'waiting for your ${r.gate} choice' : r.state.replaceAll('_', ' ')}'
+                '${r.error != null ? ' — ${r.error}' : ''}\n'
                 '${r.startedAt.toLocal().toString().substring(0, 16)}',
               ),
               isThreeLine: r.error != null,
-              trailing: r.awaitsAngleChoice
-                  ? FilledButton(
-                      onPressed: _busy ? null : () => _pickAngle(r), child: const Text('Pick angle'))
+              onTap: () => _open(RunDetailScreen(runId: r.id)),
+              trailing: r.awaitsInput
+                  ? FilledButton(onPressed: _busy ? null : () => _open(RunDetailScreen(runId: r.id)), child: const Text('Answer'))
                   : null,
             );
           },
         ),
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.extended(
-            heroTag: 'topic',
-            onPressed: _busy ? null : _requestTopic,
-            icon: const Icon(Icons.lightbulb_outline),
-            label: const Text('My topic'),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton.extended(
-            heroTag: 'run',
-            onPressed: _busy ? null : _trigger,
-            icon: const Icon(Icons.play_arrow),
-            label: const Text('Run now'),
-          ),
-        ],
-      ),
+      floatingActionButton: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+        FloatingActionButton.extended(
+          heroTag: 'topic',
+          onPressed: _busy ? null : _requestTopic,
+          icon: const Icon(Icons.lightbulb_outline),
+          label: const Text('My topic'),
+        ),
+        const SizedBox(height: 8),
+        FloatingActionButton.extended(
+          heroTag: 'run',
+          onPressed: _busy ? null : _generate,
+          icon: const Icon(Icons.auto_awesome),
+          label: const Text('Generate'),
+        ),
+      ]),
     );
   }
 }

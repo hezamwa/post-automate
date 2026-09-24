@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { BudgetBreakdown, type Breakdown } from "./BudgetBreakdown";
 
 // /admin/monitor + the switch panel (FR-15.11, design §10.1): spend, caps, pipeline,
 // route health — and every kill switch with who set it and when, flippable in place.
@@ -56,6 +57,7 @@ interface Budget {
   spentUsd: number;
   percentUsed: number;
   projectedMonthEndUsd: number;
+  breakdown: Breakdown;
 }
 
 const SWITCHES = ["ai.paused", "publishing.paused", "runs.paused"];
@@ -211,20 +213,7 @@ export function MonitorView() {
           </table>
         </div>
 
-        <div className="panel">
-          <h2>Spend breakdown</h2>
-          <table>
-            <thead><tr><th>Task</th><th>USD</th></tr></thead>
-            <tbody>
-              {data.spend.byTask.map((t) => (
-                <tr key={t.taskType}><td>{t.taskType}</td><td>${t.usd.toFixed(3)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="muted">
-            By provider: {data.spend.byProvider.map((p) => `${p.provider} $${p.usd.toFixed(2)}`).join(" · ") || "—"}
-          </p>
-        </div>
+        <BudgetBreakdown data={budget.breakdown} />
 
         <div className="panel">
           <h2>Pipeline (this month)</h2>

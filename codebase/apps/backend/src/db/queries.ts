@@ -23,8 +23,10 @@ export async function listDraftsWithDerivatives(db: Db, userId: string) {
       publishAt: schema.drafts.publishAt,
       createdAt: schema.drafts.createdAt,
       decidedAt: schema.drafts.decidedAt,
+      gate: schema.pipelineRuns.gate, // the step the run waits on — "publish" shows in the queue
     })
     .from(schema.drafts)
+    .leftJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, schema.drafts.runId))
     .where(eq(schema.drafts.userId, userId))
     .orderBy(desc(schema.drafts.createdAt))
     .limit(50);
@@ -115,7 +117,7 @@ export async function getDraftDetail(db: Db, userId: string, draftId: string) {
         revisionNo: r.revisionNo,
       })),
     run: run
-      ? { state: run.state, trigger: run.trigger, angleProposals: run.angleProposals, outline: run.outline }
+      ? { state: run.state, gate: run.gate, trigger: run.trigger, angleProposals: run.angleProposals, outline: run.outline }
       : null,
   };
 }

@@ -31,6 +31,7 @@ describe("GET /runs/:id", () => {
     expect(res.status).toBe(200);
     expect(res.json.run).toMatchObject({ id: params.runId, state: "scoring", gate: "topic" });
     expect(res.json.run).not.toHaveProperty("workflowInstanceId");
+    expect(res.json.draftId).toBeNull(); // no draft saved yet at the topic gate
     const gate = res.json.gate as { name: string; options: Array<{ id: string }>; recommended: string };
     expect(gate.name).toBe("topic");
     expect(gate.options).toHaveLength(3);

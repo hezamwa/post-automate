@@ -4,7 +4,8 @@ import '../api.dart';
 import '../models.dart';
 import 'draft_detail.dart';
 
-/// Drafts queue (design §15): pending first, each with its derivative outcomes.
+/// Drafts queue (design §15): pending first, each with its derivative outcomes; a draft
+/// waiting at the publish gate reads "ready to publish", a stale one says so (spec §5.1).
 class DraftsScreen extends StatefulWidget {
   const DraftsScreen({super.key});
 
@@ -41,7 +42,7 @@ class DraftsScreenState extends State<DraftsScreen> {
         'revising' => Colors.orange,
         'scheduled' => Colors.blue,
         'published' => Colors.green,
-        'rejected' || 'expired' || 'retracted' => Colors.grey,
+        'rejected' || 'retracted' => Colors.grey,
         _ => Theme.of(context).colorScheme.primary,
       };
 
@@ -53,7 +54,7 @@ class DraftsScreenState extends State<DraftsScreen> {
     final drafts = _drafts;
     if (drafts == null) return const Center(child: CircularProgressIndicator());
     if (drafts.isEmpty) {
-      return const Center(child: Text('No drafts yet — trigger a run from the Runs tab.'));
+      return const Center(child: Text('No drafts yet — tap Generate on the Runs tab.'));
     }
     return RefreshIndicator(
       onRefresh: reload,
@@ -63,17 +64,19 @@ class DraftsScreenState extends State<DraftsScreen> {
         separatorBuilder: (_, _) => const Divider(height: 1),
         itemBuilder: (context, i) {
           final d = drafts[i];
-          final failed = d.derivatives.where((x) => x.outcome != 'produced').length;
+          final failed = d.derivatives.where((x) => x.isIssue).length;
+          final label = d.gate == 'publish' ? 'ready to publish' : d.status.replaceAll('_', ' ');
           return ListTile(
             title: Text(d.angleHeadline ?? 'Draft ${d.id.substring(0, 8)}',
                 maxLines: 2, overflow: TextOverflow.ellipsis),
             subtitle: Text(
               '${d.createdAt.toLocal().toString().substring(0, 16)}'
               '${d.publishAt != null ? ' · publishes ${d.publishAt!.toLocal().toString().substring(0, 16)}' : ''}'
-              '${failed > 0 ? ' · $failed derivative issue${failed > 1 ? 's' : ''}' : ''}',
+              '${failed > 0 ? ' · $failed channel issue${failed > 1 ? 's' : ''}' : ''}'
+              '${d.stale && d.status == 'pending_approval' ? ' · waiting a long time' : ''}',
             ),
             trailing: Chip(
-              label: Text(d.status.replaceAll('_', ' ')),
+              label: Text(label),
               backgroundColor: _statusColor(context, d.status).withValues(alpha: 0.15),
               side: BorderSide.none,
             ),

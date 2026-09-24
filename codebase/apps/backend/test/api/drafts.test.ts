@@ -100,6 +100,15 @@ describe("GET /drafts/:id", () => {
     const res = await call(env, `/drafts/${draftId}`, { token });
     expect(res.json.draft).toMatchObject({ stale: true, channels: ["x"] });
   });
+
+  it("names the gate the run waits on, in the detail and in the queue (design §15)", async () => {
+    const { env } = apiEnv();
+    const { params, draftId, token } = await pending();
+    await shared.db.update(schema.pipelineRuns).set({ gate: "publish" }).where(eq(schema.pipelineRuns.id, params.runId));
+    expect((await call(env, `/drafts/${draftId}`, { token })).json.run).toMatchObject({ gate: "publish" });
+    const list = (await call(env, "/drafts", { token })).json.drafts as Array<{ id: string; gate: string | null }>;
+    expect(list.find((d) => d.id === draftId)?.gate).toBe("publish");
+  });
 });
 
 describe("POST /drafts/:id/hold and the gate info on GET /drafts/:id (spec §4.1, §4.3)", () => {

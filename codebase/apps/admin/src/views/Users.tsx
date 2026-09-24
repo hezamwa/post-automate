@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { LimitsPanel, type LimitsState } from "./LimitsPanel";
 
 // User management (FR-2.5/2.6/2.7, FR-15.8): create (temp password shown once),
 // suspend/reactivate with a reason, erase, and per-user limits.
@@ -14,18 +15,12 @@ interface UserRow {
   suspendedReason: string | null;
 }
 
-interface Limits {
-  monthlyCapUsd: number;
-  maxRunsPerDay: number;
-  maxReqPerMin: number;
-}
-
 export function UsersView({ selfId }: { selfId: string }) {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null);
-  const [limitsFor, setLimitsFor] = useState<{ userId: string; limits: Limits; spentUsd: number } | null>(null);
+  const [limitsFor, setLimitsFor] = useState<LimitsState | null>(null);
   const [form, setForm] = useState({ email: "", displayName: "", role: "user", sanityProjectId: "" });
 
   const reload = useCallback(async () => {
@@ -73,7 +68,7 @@ export function UsersView({ selfId }: { selfId: string }) {
 
   const openLimits = (u: UserRow) =>
     act(`limits-${u.id}`, async () => {
-      const res = await api<{ userId: string; limits: Limits; spentUsd: number }>(`/admin/users/${u.id}/limits`);
+      const res = await api<LimitsState>(`/admin/users/${u.id}/limits`);
       setLimitsFor(res);
     });
 
@@ -149,38 +144,13 @@ export function UsersView({ selfId }: { selfId: string }) {
       </div>
 
       {limitsFor && (
-        <div className="panel">
-          <h2>Limits (FR-15.8) — ${limitsFor.spentUsd.toFixed(2)} spent this month</h2>
-          <div className="row">
-            <div>
-              <label>Monthly cap (USD)</label>
-              <input
-                value={limitsFor.limits.monthlyCapUsd}
-                onChange={(e) => setLimitsFor({ ...limitsFor, limits: { ...limitsFor.limits, monthlyCapUsd: Number(e.target.value) } })}
-                style={{ width: "5rem" }}
-              />
-            </div>
-            <div>
-              <label>Runs / day</label>
-              <input
-                value={limitsFor.limits.maxRunsPerDay}
-                onChange={(e) => setLimitsFor({ ...limitsFor, limits: { ...limitsFor.limits, maxRunsPerDay: Number(e.target.value) } })}
-                style={{ width: "4rem" }}
-              />
-            </div>
-            <div>
-              <label>Requests / min</label>
-              <input
-                value={limitsFor.limits.maxReqPerMin}
-                onChange={(e) => setLimitsFor({ ...limitsFor, limits: { ...limitsFor.limits, maxReqPerMin: Number(e.target.value) } })}
-                style={{ width: "4rem" }}
-              />
-            </div>
-            <button className="primary" disabled={busy === "save-limits"} onClick={() => void saveLimits()}>Save</button>
-            <button onClick={() => setLimitsFor(null)}>Cancel</button>
-          </div>
-          <p className="muted">Suspension is an account state, never a $0 cap (FR-2.7).</p>
-        </div>
+        <LimitsPanel
+          value={limitsFor}
+          busy={busy === "save-limits"}
+          onChange={setLimitsFor}
+          onSave={() => void saveLimits()}
+          onCancel={() => setLimitsFor(null)}
+        />
       )}
 
       <div className="panel">
