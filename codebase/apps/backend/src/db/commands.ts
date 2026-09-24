@@ -180,6 +180,9 @@ export async function deleteUserCascade(
     await tx.delete(schema.profiles).where(eq(schema.profiles.userId, userId));
     await tx.delete(schema.onboardingSessions).where(eq(schema.onboardingSessions.userId, userId));
     await tx.delete(schema.refreshTokens).where(eq(schema.refreshTokens.userId, userId));
+    // social connections (DR-9.17): the sealed tokens go with the user
+    await tx.delete(schema.socialAccounts).where(eq(schema.socialAccounts.userId, userId));
+    await tx.delete(schema.oauthStates).where(eq(schema.oauthStates.userId, userId));
     await tx.delete(schema.userLimits).where(eq(schema.userLimits.userId, userId));
     if (routeIds.length > 0) {
       await tx.delete(schema.aiHealthChecks).where(inArray(schema.aiHealthChecks.routeId, routeIds));

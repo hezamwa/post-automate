@@ -59,6 +59,8 @@ describe("deleteUserCascade (FR-2.6)", () => {
     await db.insert(schema.draftRevisions).values({ draftId: draft!.id, revisionNo: 1, instructions: "shorter" });
     await db.insert(schema.editDiffs).values({ draftId: draft!.id, userId: target, diff: "{}" });
     await db.insert(schema.refreshTokens).values({ userId: target, tokenHash: "h", expiresAt: new Date() });
+    await db.insert(schema.socialAccounts).values({ userId: target, provider: "x", accountId: "1", handle: "@t", accessTokenEnc: "v1:x", expiresAt: new Date() });
+    await db.insert(schema.oauthStates).values({ state: "s", userId: target, provider: "x", redirectUri: "r", expiresAt: new Date() });
     await seedSpend(db, target, 3);
     const routeId = await seedRoute(target);
     await db.insert(schema.aiHealthChecks).values({ routeId, status: "ok", message: "OK" });
@@ -77,6 +79,8 @@ describe("deleteUserCascade (FR-2.6)", () => {
       [schema.refreshTokens, schema.refreshTokens.userId],
       [schema.userLimits, schema.userLimits.userId],
       [schema.aiRoutes, schema.aiRoutes.userId],
+      [schema.socialAccounts, schema.socialAccounts.userId],
+      [schema.oauthStates, schema.oauthStates.userId],
     ] as const) {
       expect(await db.select().from(table).where(eq(col, target))).toHaveLength(0);
     }

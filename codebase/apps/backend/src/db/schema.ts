@@ -391,3 +391,40 @@ export const sources = pgTable(
   },
   (t) => [unique("sources_run_url").on(t.runId, t.url)],
 );
+
+// Social publishing (requirements §18, design §17) ───────────────────────────────────
+export const socialProvider = pgEnum("social_provider", ["x", "linkedin"]);
+
+// One connection per user and provider (DR-9.17). Tokens are AES-GCM sealed with
+// SOCIAL_TOKEN_KEY before they reach this table and never leave the Worker (NFR-11.8).
+export const socialAccounts = pgTable(
+  "social_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    provider: socialProvider("provider").notNull(),
+    accountId: text("account_id").notNull(), // X user id / LinkedIn member id (OIDC sub)
+    handle: text("handle").notNull(), // @username / display name — shown in the app
+    accessTokenEnc: text("access_token_enc").notNull(),
+    refreshTokenEnc: text("refresh_token_enc"),
+    scopes: text("scopes").notNull().default(""),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    refreshExpiresAt: timestamp("refresh_expires_at", { withTimezone: true }),
+    // FR-18.7: the one "reconnect LinkedIn" push per connection; a reconnect clears it
+    expiryRemindedAt: timestamp("expiry_reminded_at", { withTimezone: true }),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("social_accounts_user_provider").on(t.userId, t.provider)],
+);
+
+// Single-use OAuth state (design §17): 10 minutes, deleted by the callback that consumes it.
+export const oauthStates = pgTable("oauth_states", {
+  state: text("state").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  provider: socialProvider("provider").notNull(),
+  codeVerifier: text("code_verifier"), // PKCE (X)
+  redirectUri: text("redirect_uri").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

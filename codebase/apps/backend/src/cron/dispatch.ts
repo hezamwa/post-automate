@@ -8,6 +8,7 @@ import { isActive } from "./activity";
 import { autoPublish } from "./auto-publish";
 import { nudgeSilentCreators } from "./nudges";
 import { draftReminders } from "./reminders";
+import { remindExpiringConnections } from "./social-expiry";
 
 const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
@@ -15,7 +16,8 @@ const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
  * Daily 06:00 UTC (spec §2). A scheduled run launches only for a creator who opted in
  * (profile.autoRun), was active in the last 7 days, has today in their preferred days,
  * and has no undecided draft. Everyone else gets nothing — no run, no spend. Then the
- * free jobs: transcript purge (OD-7), draft reminders, the silence nudge.
+ * free jobs: transcript purge (OD-7), draft reminders, the silence nudge, auto-publish,
+ * and the social reconnect reminder (FR-18.7).
  */
 export async function dailyDispatch(env: Env, db: Db, now = new Date()): Promise<{ launched: string[]; skipped: Array<[string, string]> }> {
   const today = DAY_NAMES[now.getUTCDay()]!;
@@ -41,6 +43,7 @@ export async function dailyDispatch(env: Env, db: Db, now = new Date()): Promise
   await draftReminders(env, db, now);
   await nudgeSilentCreators(env, db, now);
   await autoPublish(env, db, now);
+  await remindExpiringConnections(env, db, now);
   return { launched, skipped };
 }
 

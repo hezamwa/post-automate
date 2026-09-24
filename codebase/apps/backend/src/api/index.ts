@@ -5,6 +5,7 @@ import { onboarding } from "./onboarding";
 import { drafts } from "./drafts";
 import { me } from "./me";
 import { profile } from "./profile";
+import { social } from "./social";
 import { runs } from "./runs";
 import { admin } from "./admin";
 import { webhooks } from "./webhooks";
@@ -15,6 +16,7 @@ export const api = new Hono<{ Bindings: Env }>()
   .route("/onboarding", onboarding)
   .route("/profile", profile)
   .route("/me", me)
+  .route("/social", social)
   .route("/drafts", drafts)
   .route("/runs", runs)
   .route("/admin", admin)

@@ -22,6 +22,14 @@ export interface Env {
   JWT_SIGNING_KEY: string;
   FCM_SERVICE_ACCOUNT: string;
   SANITY_WEBHOOK_SECRET: string;
+  // Social publishing (requirements §18, design §17). Optional: unset = connecting is
+  // refused with a readable 503, nothing else is affected.
+  X_CLIENT_ID?: string;
+  X_CLIENT_SECRET?: string;
+  LINKEDIN_CLIENT_ID?: string;
+  LINKEDIN_CLIENT_SECRET?: string;
+  SOCIAL_TOKEN_KEY?: string; // base64, 32 bytes — AES-GCM key for stored tokens (NFR-11.8)
+  LINKEDIN_API_VERSION?: string; // YYYYMM; the default lives in modules/social/linkedin.ts
   DATABASE_URL?: string;
   // Optional: Cloudflare AI Gateway route for Anthropic (design §6.4). Unset = direct API.
   AI_GATEWAY_ANTHROPIC_BASE_URL?: string;

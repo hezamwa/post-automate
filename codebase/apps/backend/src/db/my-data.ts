@@ -1,5 +1,6 @@
 import { count, desc, eq } from "drizzle-orm";
 import { monthToDateUsd } from "../ai/meter";
+import { listConnections } from "../modules/social/accounts";
 import { schema, type Db } from "./client";
 
 // "My data" (FR-3.15, design §7 /me/data): what the system stores about one user, read-only
@@ -57,6 +58,7 @@ export async function myData(db: Db, userId: string) {
     editDiffs,
     revisions,
     draftsByStatus,
+    socialAccounts: await listConnections(db, userId), // never tokens (NFR-11.8)
     spend: {
       monthToDateUsd: Number((await monthToDateUsd(db, userId)).toFixed(4)),
       monthlyCapUsd: Number(limits?.monthlyCapUsd ?? 10),

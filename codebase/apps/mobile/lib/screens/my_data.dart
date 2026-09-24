@@ -55,6 +55,8 @@ class _MyDataScreenState extends State<MyDataScreen> {
                       '\$${s['monthToDateUsd']} of \$${s['monthlyCapUsd']} · ${s['maxRunsPerDay']} runs/day · auto-publish ${s['autoPublish'] == true ? 'on' : 'off'}'),
                   ..._section('Profile versions', d['profileVersions'] as List<dynamic>,
                       (p) => 'v${p['version']} · ${p['status']} · ${_date(p['createdAt'])}'),
+                  ..._section('Connected accounts', (d['socialAccounts'] as List<dynamic>?) ?? [],
+                      (a) => '${a['provider']} · ${a['handle']} · ${a['state']} · connected ${_date(a['connectedAt'])}'),
                   ..._section('Drafts', d['draftsByStatus'] as List<dynamic>, (r) => '${r['status']}: ${r['n']}'),
                   ..._section('Choices you made', d['gateChoices'] as List<dynamic>,
                       (g) => '${g['gate']} · ${g['source']}${g['freeText'] != null ? ' · "${g['freeText']}"' : ''} · ${_date(g['chosenAt'])}'),

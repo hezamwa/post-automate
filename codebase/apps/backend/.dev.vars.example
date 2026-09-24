@@ -18,6 +18,12 @@ SANITY_WEBHOOK_SECRET=
 DATABASE_URL=
 # Neon account API key — used by setup/tooling scripts only, never a Worker secret
 NEON_API_KEY=
-# X.com OAuth app credentials — parked for the future X publishing integration (post-v1, FR-6.12)
+# Social publishing (requirements §18, runbook §6): the platforms' OAuth app credentials, and
+# SOCIAL_TOKEN_KEY (openssl rand -base64 32) which encrypts every stored user token at rest
 X_CLIENT_ID=
 X_CLIENT_SECRET=
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+SOCIAL_TOKEN_KEY=
+# Optional: LinkedIn API version (YYYYMM) when the default in code is retired
+LINKEDIN_API_VERSION=

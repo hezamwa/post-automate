@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../widgets/profile/connected_accounts.dart';
 import '../widgets/profile/fields.dart';
 import '../widgets/profile/publishing_section.dart';
 import '../widgets/profile/topics_section.dart';
@@ -88,6 +89,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           WritingSection(profile: profile, onChanged: _changed),
           TopicsSection(profile: profile, onChanged: _changed),
           PublishingSection(profile: profile, onChanged: _changed),
+          const ConnectedAccounts(),
         ],
       ),
       floatingActionButton: _dirty
