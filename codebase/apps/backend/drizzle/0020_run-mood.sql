@@ -1,0 +1,2 @@
+CREATE TYPE "public"."run_mood" AS ENUM('normal', 'optimistic', 'excited', 'very_excited', 'concerned', 'disappointed', 'critical');--> statement-breakpoint
+ALTER TABLE "pipeline_runs" ADD COLUMN "mood" "run_mood" DEFAULT 'normal' NOT NULL;

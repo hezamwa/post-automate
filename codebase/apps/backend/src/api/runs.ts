@@ -1,12 +1,14 @@
 import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import { MEDICAL_BLOCKED_MOODS, moodSchema, type Mood, type Profile } from "@post-automate/shared";
 import { requireAuth, type AuthedEnv } from "../auth/middleware";
 import { createDb, schema } from "../db/client";
 import { createRun } from "../db/commands";
 import { gateChoicesForRun, getDraftByRun, undecidedDraft } from "../db/queries";
 import { checkTopicRequest } from "../modules/discovery";
 import { getActiveProfile } from "../modules/profiles";
+import { hasMedicalGuardrails } from "../modules/profiles/medical";
 import { getFlags } from "../shared/flags";
 import type { Env } from "../shared/env";
 import type { Db } from "../db/client";
@@ -25,8 +27,17 @@ const requestSchema = z
     notes: z.string().optional(),
     links: z.array(z.string().url()).max(10).optional(),
     overrideBannedTopics: z.boolean().optional(),
+    mood: moodSchema.optional(), // FR-6.19
   })
   .strict();
+
+const triggerSchema = z.object({ mood: moodSchema.optional() }).strict();
+
+/** FR-6.20: `critical` is never accepted for a profile with medical guardrails. */
+function refuseMood(profile: Profile, mood: Mood | undefined) {
+  if (!mood || !MEDICAL_BLOCKED_MOODS.includes(mood) || !hasMedicalGuardrails(profile)) return null;
+  return { error: `The "${mood}" mood is not available for a profile with medical guardrails (FR-6.20) — choose another.` };
+}
 
 const RUNS_PAUSED = { error: "New pipeline runs are paused by an administrator — resume runs in admin settings (FR-15.12)." };
 
@@ -47,17 +58,19 @@ async function refuseWhilePending(db: Db, userId: string) {
 async function launchRun(
   c: { env: Env },
   db: Db,
-  args: { userId: string; profileVersion: number; userTopic?: { title: string; notes?: string; links?: string[] } },
+  args: { userId: string; profileVersion: number; userTopic?: { title: string; notes?: string; links?: string[] }; mood?: Mood },
 ): Promise<{ runId: string; workflowInstanceId: string }> {
+  const mood = args.mood ?? "normal";
   const run = await createRun(db, {
     userId: args.userId,
     trigger: args.userTopic ? "user_topic" : "manual",
     profileVersion: args.profileVersion,
     userTopic: args.userTopic,
+    mood,
   });
   const instance = await c.env.PIPELINE.create({
     id: run.id,
-    params: { runId: run.id, userId: args.userId, userTopic: args.userTopic },
+    params: { runId: run.id, userId: args.userId, userTopic: args.userTopic, mood },
   });
   await db.update(schema.pipelineRuns).set({ workflowInstanceId: instance.id }).where(eq(schema.pipelineRuns.id, run.id));
   return { runId: run.id, workflowInstanceId: instance.id };
@@ -114,19 +127,24 @@ export const runs = new Hono<AuthedEnv>()
   })
 
   // Manual pipeline run — discovery picks the topic. For a topic of your own, use /request.
+  // Optional body { mood } (FR-6.19).
   .post("/trigger", async (c) => {
+    const body = triggerSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: body.error.issues[0]?.message ?? "invalid body" }, 400);
     const db = createDb(c.env);
     if ((await getFlags(db))["runs.paused"]) return c.json(RUNS_PAUSED, 503); // FR-15.12c: before the run row exists
     const userId = c.get("userId");
     const pending = await refuseWhilePending(db, userId);
     if (pending) return c.json(pending, 409);
-    let profileVersion: number;
+    let active;
     try {
-      profileVersion = (await getActiveProfile(db, userId)).version;
+      active = await getActiveProfile(db, userId);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "no active profile" }, 409);
     }
-    return c.json(await launchRun(c, db, { userId, profileVersion }));
+    const refused = refuseMood(active.profile, body.data.mood);
+    if (refused) return c.json(refused, 400);
+    return c.json(await launchRun(c, db, { userId, profileVersion: active.version, mood: body.data.mood }));
   })
 
   // FR-5.8/FR-7.7: user-requested topic. Banned-topic collisions warn and require
@@ -145,6 +163,8 @@ export const runs = new Hono<AuthedEnv>()
     let warnings;
     try {
       const active = await getActiveProfile(db, userId);
+      const refused = refuseMood(active.profile, topic.mood);
+      if (refused) return c.json(refused, 400);
       profileVersion = active.version;
       warnings = await checkTopicRequest(db, active.profile, userId, topic);
     } catch (e) {
@@ -160,7 +180,7 @@ export const runs = new Hono<AuthedEnv>()
         409,
       );
     }
-    const launched = await launchRun(c, db, { userId, profileVersion, userTopic: { title: topic.title, notes: topic.notes, links: topic.links } });
+    const launched = await launchRun(c, db, { userId, profileVersion, userTopic: { title: topic.title, notes: topic.notes, links: topic.links }, mood: topic.mood });
     return c.json({ ...launched, warnings }); // dedup similarity is informational (FR-7.7)
   })
 

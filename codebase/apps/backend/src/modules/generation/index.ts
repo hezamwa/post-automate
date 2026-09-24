@@ -2,7 +2,7 @@
 // All AI calls go through the router (AR-10.9); prompts live in workflows/prompts and
 // guardrails live inside them.
 import { and, desc, eq } from "drizzle-orm";
-import type { Language, Profile } from "@post-automate/shared";
+import type { Language, Mood, Profile } from "@post-automate/shared";
 import { GateError } from "../../ai/gates";
 import { toChatRequest, type PromptSpec } from "../../ai/prompts/spec";
 import { NoRouteError, runImageTask, runTask } from "../../ai/router";
@@ -34,6 +34,8 @@ interface RunCtx {
   userId: string;
   runId: string;
   profile: Profile;
+  /** FR-6.19: the run's mood — read by the article and channel prompts only. */
+  mood?: Mood;
 }
 
 /** FR-6.3 step 1: three angles + a recommended pick in one structured call. */
@@ -69,7 +71,7 @@ export async function writeArticle(
     userId: ctx.userId,
     runId: ctx.runId,
     // approvedExamples: from Sanity later (FR-6.2)
-    input: toChatRequest(buildDraftPrompt({ profile: ctx.profile, topic, angle, approvedExamples: [], revision, ...grounding })),
+    input: toChatRequest(buildDraftPrompt({ profile: ctx.profile, mood: ctx.mood, topic, angle, approvedExamples: [], revision, ...grounding })),
   });
   const article = result.parsed as Article;
   if (article.markdown.trim().startsWith("CANNOT_COMPLY")) throw new ComplianceRefusalError();
@@ -105,7 +107,7 @@ export async function deriveChannelText(
     taskType: channel.taskType,
     userId: ctx.userId,
     runId: ctx.runId,
-    input: toChatRequest(channel.build({ profile: ctx.profile, markdown, tooLong })),
+    input: toChatRequest(channel.build({ profile: ctx.profile, mood: ctx.mood, markdown, tooLong })),
   });
   return result.text.trim();
 }

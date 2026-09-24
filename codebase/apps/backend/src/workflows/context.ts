@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { profileSchema, type Profile } from "@post-automate/shared";
+import { moodSchema, profileSchema, type Mood, type Profile } from "@post-automate/shared";
 import type { Env } from "../shared/env";
 
 // RunContext — what every step and gate receives (spec §2/§3). Everything except `env`
@@ -20,8 +20,10 @@ export const pipelineParamsSchema = z.object({
   userId: z.string().uuid(),
   /** Set for user-requested runs (FR-5.8): research replaces discover + score. */
   userTopic: userTopicSchema.optional(),
+  /** FR-6.19: the article's mood — scheduled runs and older instances read as normal. */
+  mood: moodSchema.default("normal"),
 });
-export type PipelineParams = z.infer<typeof pipelineParamsSchema>;
+export type PipelineParams = z.input<typeof pipelineParamsSchema>;
 
 /** The profile version pinned for the whole run by load-profile (spec §3 step 2). */
 export const pinnedProfileSchema = z.object({
@@ -30,7 +32,7 @@ export const pinnedProfileSchema = z.object({
 });
 export type PinnedProfile = z.infer<typeof pinnedProfileSchema>;
 
-export interface RunContext extends PipelineParams {
+export interface RunContext extends z.output<typeof pipelineParamsSchema> {
   env: Env;
   pinned?: PinnedProfile;
   /** Gate choices recorded so far, keyed by gate name (spec §4.3). */
@@ -54,6 +56,6 @@ export function profileOf(ctx: RunContext): Profile {
 }
 
 /** The module-facing slice of the context (discovery/generation take {userId, runId, profile}). */
-export function moduleCtx(ctx: RunContext): { userId: string; runId: string; profile: Profile } {
-  return { userId: ctx.userId, runId: ctx.runId, profile: profileOf(ctx) };
+export function moduleCtx(ctx: RunContext): { userId: string; runId: string; profile: Profile; mood: Mood } {
+  return { userId: ctx.userId, runId: ctx.runId, profile: profileOf(ctx), mood: ctx.mood };
 }

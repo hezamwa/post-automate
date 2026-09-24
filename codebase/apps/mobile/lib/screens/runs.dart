@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../models.dart';
+import '../widgets/mood.dart';
 import '../widgets/topic_request_dialog.dart';
 import 'draft_detail.dart';
 import 'run_detail.dart';
@@ -64,12 +65,16 @@ class RunsScreenState extends State<RunsScreen> {
     }
   }
 
-  Future<void> _generate() => _act(() async {
-        final res = await ApiClient.instance.post('/runs/trigger');
-        if (!mounted) return;
-        _snack('Generating — finding what is trending for you.');
-        await _open(RunDetailScreen(runId: res['runId'] as String));
-      });
+  Future<void> _generate() async {
+    final mood = await moodDialog(context);
+    if (mood == null) return;
+    await _act(() async {
+      final res = await ApiClient.instance.post('/runs/trigger', {'mood': mood});
+      if (!mounted) return;
+      _snack('Generating — finding what is trending for you.');
+      await _open(RunDetailScreen(runId: res['runId'] as String));
+    });
+  }
 
   Future<void> _requestTopic() async {
     final body = await topicRequestDialog(context);
@@ -79,7 +84,9 @@ class RunsScreenState extends State<RunsScreen> {
         await _startTopic(body);
       } on ApiException catch (e) {
         if (e.status != 409 || e.body?['requiresOverride'] != true) rethrow;
-        if (!mounted || !await bannedTopicOverrideDialog(context, e.message)) return;
+        if (!mounted || !await bannedTopicOverrideDialog(context, e.message)) {
+          return;
+        }
         await _startTopic({...body, 'overrideBannedTopics': true});
       }
     });
@@ -89,13 +96,17 @@ class RunsScreenState extends State<RunsScreen> {
     final res = await ApiClient.instance.post('/runs/request', body);
     final similar = ((res['warnings'] as Map<String, dynamic>?)?['similarRecentTopics'] as List<dynamic>?) ?? [];
     if (!mounted) return;
-    _snack(similar.isEmpty ? 'Researching your topic.' : 'Started. Heads-up: similar to recent "${similar.first}" (FR-5.7).');
+    _snack(
+      similar.isEmpty ? 'Researching your topic.' : 'Started. Heads-up: similar to recent "${similar.first}" (FR-5.7).',
+    );
     await _open(RunDetailScreen(runId: res['runId'] as String));
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null) return Center(child: Text(_error!, textAlign: TextAlign.center));
+    if (_error != null) {
+      return Center(child: Text(_error!, textAlign: TextAlign.center));
+    }
     final runs = _runs;
     if (runs == null) return const Center(child: CircularProgressIndicator());
     return Scaffold(
@@ -117,27 +128,34 @@ class RunsScreenState extends State<RunsScreen> {
               isThreeLine: r.error != null,
               onTap: () => _open(RunDetailScreen(runId: r.id)),
               trailing: r.awaitsInput
-                  ? FilledButton(onPressed: _busy ? null : () => _open(RunDetailScreen(runId: r.id)), child: const Text('Answer'))
+                  ? FilledButton(
+                      onPressed: _busy ? null : () => _open(RunDetailScreen(runId: r.id)),
+                      child: const Text('Answer'),
+                    )
                   : null,
             );
           },
         ),
       ),
-      floatingActionButton: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
-        FloatingActionButton.extended(
-          heroTag: 'topic',
-          onPressed: _busy ? null : _requestTopic,
-          icon: const Icon(Icons.lightbulb_outline),
-          label: const Text('My topic'),
-        ),
-        const SizedBox(height: 8),
-        FloatingActionButton.extended(
-          heroTag: 'run',
-          onPressed: _busy ? null : _generate,
-          icon: const Icon(Icons.auto_awesome),
-          label: const Text('Generate'),
-        ),
-      ]),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'topic',
+            onPressed: _busy ? null : _requestTopic,
+            icon: const Icon(Icons.lightbulb_outline),
+            label: const Text('My topic'),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.extended(
+            heroTag: 'run',
+            onPressed: _busy ? null : _generate,
+            icon: const Icon(Icons.auto_awesome),
+            label: const Text('Generate'),
+          ),
+        ],
+      ),
     );
   }
 }

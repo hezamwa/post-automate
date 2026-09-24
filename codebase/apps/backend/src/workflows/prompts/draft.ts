@@ -1,5 +1,5 @@
-import type { Profile } from "@post-automate/shared";
-import { audienceBlock, editorialRules, fewShotBlock, guardrailsBlock, voiceBlock } from "../../ai/prompts/blocks";
+import type { Mood, Profile } from "@post-automate/shared";
+import { audienceBlock, editorialRules, fewShotBlock, guardrailsBlock, moodBlock, voiceBlock } from "../../ai/prompts/blocks";
 import type { PromptSpec } from "../../ai/prompts/spec";
 import type { TopicBrief } from "../../modules/discovery/types";
 import type { Angle, Outline } from "../../modules/generation/types";
@@ -28,6 +28,8 @@ export const articleJsonSchema = {
 
 export interface DraftPromptInput {
   profile: Profile;
+  /** FR-6.19: the run's mood — a line after VOICE; absent or normal adds nothing. */
+  mood?: Mood;
   topic: TopicBrief;
   angle: Angle;
   /** 2–3 most recently approved posts (FR-6.2); empty → profile.examplePosts. */
@@ -65,6 +67,7 @@ export function buildDraftPrompt(input: DraftPromptInput): PromptSpec {
   const system = [
     editorialRules(profile),
     voiceBlock(profile),
+    ...[moodBlock(input.mood)].filter(Boolean), // only a non-normal mood adds a block
     audienceBlock(profile),
     guardrailsBlock(profile),
     fewShotBlock(approvedExamples.length > 0 ? approvedExamples : profile.examplePosts),

@@ -27,7 +27,7 @@ type RunRow = typeof schema.pipelineRuns.$inferSelect;
 
 /** A context for work on a run's behalf outside the engine, pinned to the run's profile version. */
 export async function runContextFor(env: Env, db: Db, run: RunRow): Promise<RunContext> {
-  const ctx = createRunContext(env, { runId: run.id, userId: run.userId, ...(run.userTopic ? { userTopic: run.userTopic as RunContext["userTopic"] } : {}) });
+  const ctx = createRunContext(env, { runId: run.id, userId: run.userId, mood: run.mood, ...(run.userTopic ? { userTopic: run.userTopic as RunContext["userTopic"] } : {}) });
   pinProfile(ctx, await getProfileVersion(db, run.userId, run.profileVersion));
   return ctx;
 }

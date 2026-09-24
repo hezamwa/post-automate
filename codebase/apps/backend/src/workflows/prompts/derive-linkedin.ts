@@ -1,5 +1,5 @@
-import type { Profile } from "@post-automate/shared";
-import { voiceBlock } from "../../ai/prompts/blocks";
+import type { Mood, Profile } from "@post-automate/shared";
+import { moodBlock, voiceBlock } from "../../ai/prompts/blocks";
 import type { PromptSpec } from "../../ai/prompts/spec";
 import type { ChatMessage } from "../../ai/types";
 
@@ -10,6 +10,8 @@ export const LINKEDIN_MAX_CHARS = 3000;
 
 export interface ShortenInput {
   profile: Profile;
+  /** FR-6.19: the channel versions carry the article's mood. */
+  mood?: Mood;
   markdown: string;
   /** A previous answer that exceeded the channel limit — asks for a shorter rewrite. */
   tooLong?: string;
@@ -33,6 +35,7 @@ export function buildDeriveLinkedInPrompt(input: ShortenInput): PromptSpec {
     version: PROMPT_VERSION,
     system: [
       voiceBlock(profile),
+      ...[moodBlock(input.mood)].filter(Boolean),
       `Rewrite the article below as ONE LinkedIn post (max ${LINKEDIN_MAX_CHARS} characters; professional register; language: ${profile.primaryLanguage}). Structure: a strong first line (it shows before "see more"), 2-4 short paragraphs of substance, a closing line inviting the full read. At most 3 hashtags. Reply with the post text only.`,
     ],
     messages: shortenMessages(input, LINKEDIN_MAX_CHARS),

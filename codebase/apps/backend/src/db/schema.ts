@@ -64,6 +64,8 @@ export const derivativeKind = pgEnum("derivative_kind", ["hero_image", "x", "lin
 // no call made, but a row so the publish screen shows it was a choice, not a failure.
 export const derivativeOutcome = pgEnum("derivative_outcome", ["produced", "skipped", "failed", "declined"]);
 export const blogType = pgEnum("blog_type", ["public", "em"]);
+// FR-6.19 (OD-28): the per-article mood — values mirror @post-automate/shared MOODS.
+export const runMood = pgEnum("run_mood", ["normal", "optimistic", "excited", "very_excited", "concerned", "disappointed", "critical"]);
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -151,6 +153,7 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   // chosen one as text — or "none" when the creator wanted no hero image.
   imageConcepts: jsonb("image_concepts"),
   chosenImageConcept: text("chosen_image_concept"),
+  mood: runMood("mood").notNull().default("normal"), // FR-6.19: set at run start, kept by revisions
   state: runState("state").notNull().default("discovering"), // DR-9.4
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),

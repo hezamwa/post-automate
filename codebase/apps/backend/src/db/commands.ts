@@ -1,5 +1,6 @@
 // Write-side helpers for pipeline runs, drafts and users (CQRS command side, AR-10.6).
 import { and, count, eq, inArray, isNull } from "drizzle-orm";
+import type { Mood } from "@post-automate/shared";
 import { schema, type Db } from "./client";
 
 type RunState = (typeof schema.runState.enumValues)[number];
@@ -12,6 +13,7 @@ export async function createRun(
     profileVersion: number;
     userTopic?: { title: string; notes?: string; links?: string[] };
     workflowInstanceId?: string;
+    mood?: Mood;
   },
 ): Promise<{ id: string }> {
   const [row] = await db
@@ -21,6 +23,7 @@ export async function createRun(
       trigger: args.trigger,
       profileVersion: args.profileVersion,
       userTopic: args.userTopic ?? null,
+      mood: args.mood ?? "normal",
       workflowInstanceId: args.workflowInstanceId ?? null,
       state: "discovering",
     })

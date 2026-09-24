@@ -1,4 +1,4 @@
-import type { Profile } from "@post-automate/shared";
+import type { Mood, Profile } from "@post-automate/shared";
 import type { FetchedResult } from "../../modules/discovery/types";
 
 // Composed prompt blocks (design §6, FR-6.1). Stable, profile-derived content first —
@@ -31,6 +31,22 @@ export function voiceBlock(profile: Profile): string {
     `- Emoji: ${v.emojiPolicy}. Hashtags: ${v.hashtagPolicy}.`,
     `- Hook style: ${v.hookStyle}.`,
   ].join("\n");
+}
+
+// FR-6.19–6.20 (design §6 "Mood block"): one adjustment line after VOICE, before the
+// guardrails, which keep the last word. `normal` adds nothing.
+const MOOD_GUIDANCE: Record<Exclude<Mood, "normal">, string> = {
+  optimistic: "hopeful and forward-looking; emphasise opportunities and progress",
+  excited: "energetic and enthusiastic about what is new",
+  very_excited: "high-energy and celebratory — still precise, with no hype words or superlatives the sources do not earn",
+  concerned: "serious and careful; name the risks plainly, without alarmism",
+  disappointed: "candid about what fell short; measured and constructive",
+  critical: "a firm, evidence-based critique of ideas and decisions — never of people",
+};
+
+export function moodBlock(mood: Mood | undefined): string {
+  if (!mood || mood === "normal") return "";
+  return `MOOD — for this piece, lean ${mood.replace("_", " ")}: ${MOOD_GUIDANCE[mood]}. This adjusts the creator's usual voice — keep their formality, sentence length and policies. Never let the mood add claims the sources do not support.`;
 }
 
 export function audienceBlock(profile: Profile): string {

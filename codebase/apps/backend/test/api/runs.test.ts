@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetShared, shared } from "../workflow/preamble";
 import { schema } from "../../src/db/client";
+import { techProfile } from "../fixtures";
 import { seedCreator, seedDraftRow, startRun } from "../workflow/harness";
 import { apiEnv, call, tokenFor } from "./client";
 
@@ -57,5 +58,36 @@ describe("activity (spec §2)", () => {
     const userId = await seedCreator();
     expect((await call(env, "/drafts")).status).toBe(401);
     expect((await shared.db.query.users.findFirst({ where: eq(schema.users.id, userId) }))?.lastActiveAt).toBeNull();
+  });
+});
+
+describe("mood (FR-6.19–6.20)", () => {
+  const medical = () =>
+    techProfile({
+      domain: { field: "medical", subNiches: ["cardiology"] },
+      compliance: { noDiagnosis: true, noDosage: true, noCaseReferences: true, disclaimerText: "Not advice." },
+    });
+  const moodOf = async (runId: unknown) =>
+    (await shared.db.query.pipelineRuns.findFirst({ where: eq(schema.pipelineRuns.id, runId as string) }))?.mood;
+
+  it("stores the chosen mood on the run; absent means normal", async () => {
+    const { env } = apiEnv();
+    const token = await tokenFor(await seedCreator());
+    const excited = await call(env, "/runs/trigger", { method: "POST", token, body: { mood: "excited" } });
+    expect(await moodOf(excited.json.runId)).toBe("excited");
+    const other = await tokenFor(await seedCreator());
+    const plain = await call(env, "/runs/request", { method: "POST", token: other, body: { title: "my topic" } });
+    expect(await moodOf(plain.json.runId)).toBe("normal");
+  });
+
+  it("refuses an unknown mood, and critical for a medical profile (400, no run)", async () => {
+    const { env, pipeline } = apiEnv();
+    const token = await tokenFor(await seedCreator(medical()));
+    expect((await call(env, "/runs/trigger", { method: "POST", token, body: { mood: "angry" } })).status).toBe(400);
+    const critical = await call(env, "/runs/trigger", { method: "POST", token, body: { mood: "critical" } });
+    expect(critical).toMatchObject({ status: 400, json: { error: expect.stringContaining("medical guardrails") } });
+    expect((await call(env, "/runs/request", { method: "POST", token, body: { title: "t", mood: "critical" } })).status).toBe(400);
+    expect(pipeline.instances.size).toBe(0);
+    expect((await call(env, "/runs/trigger", { method: "POST", token, body: { mood: "concerned" } })).status).toBe(200);
   });
 });

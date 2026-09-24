@@ -24,6 +24,13 @@ describe("draft step", () => {
     expect(shared.ai.callsFor("article")[0]!.input.messages[0]!.content).toContain("Headline: Angle two");
   });
 
+  it("carries the run's mood into the article prompt (FR-6.19)", async () => {
+    const ctx = await stepContext();
+    ctx.mood = "disappointed";
+    await runStep(shared.step as never, ctx, draft, { topic: await topicFor(ctx), angle: ANGLES[0]!, outline: null });
+    expect(JSON.stringify(shared.ai.callsFor("article")[0]!.input.system)).toContain("lean disappointed");
+  });
+
   it("CANNOT_COMPLY is listed non-retryable and thrown once (FR-6.6–6.8)", async () => {
     const ctx = await stepContext();
     shared.ai.respondWith("article", () => article("CANNOT_COMPLY"));
