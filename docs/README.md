@@ -1,9 +1,9 @@
 # post-automate
 
 Automated social content pipeline: discovers (or takes) topics, writes long-form articles
-in each creator's voice with derivatives (hero image, X version, translation), routes every
-AI task through a configurable multi-provider layer, and publishes to Sanity after human
-approval.
+in each creator's voice with derivatives (hero image, X and LinkedIn versions, translation), routes every
+AI task through a configurable multi-provider layer, publishes to Sanity after human
+approval, and posts the approved X and LinkedIn versions to the creator's connected accounts.
 
 Spec: [docs/requirement.md](docs/requirement.md) · Design: [docs/design.md](docs/design.md) ·
 Article workflow: [docs/article-workflow.md](docs/article-workflow.md)

@@ -28,7 +28,9 @@ Admin-triggered route tests bypass `ai.paused` and the global cap; nothing else 
 **Inventory** (per environment): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`,
 `MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, `GROK_API_KEY`, `MANUS_API_KEY`,
 `BRAVE_API_KEY` (FR-15.9); `SANITY_TOKEN_R9ZDT0S0`, `SANITY_TOKEN_5GZ3NGJS` (FR-8.4);
-`JWT_SIGNING_KEY`, `FCM_SERVICE_ACCOUNT`, `SANITY_WEBHOOK_SECRET`; local dev additionally
+`JWT_SIGNING_KEY`, `FCM_SERVICE_ACCOUNT`, `SANITY_WEBHOOK_SECRET`; social publishing (§6)
+`X_CLIENT_ID`, `X_CLIENT_SECRET`, `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`,
+`SOCIAL_TOKEN_KEY`; local dev additionally
 `DATABASE_URL` in the gitignored `.dev.vars`.
 
 **Procedure (any provider key):**
@@ -45,6 +47,9 @@ settings first. **`JWT_SIGNING_KEY`:** rotating it invalidates all sessions — 
 log in again (refresh tokens are DB-side and survive nothing here by design).
 **`SANITY_WEBHOOK_SECRET`:** update the webhook's secret in the Sanity project settings
 in the same sitting.
+**`SOCIAL_TOKEN_KEY`:** rotating it makes every stored social token unreadable — users
+reconnect X and LinkedIn from their profile page. **X / LinkedIn client secrets:** regenerate
+in the platform's developer portal, `wrangler secret put`, then connect once to confirm.
 
 ---
 
@@ -153,3 +158,44 @@ still writes `drafts.*` into the real projects and never publishes (FR-8.5).
 creators with `autoRun` on who were active in the last 7 days; everything else it does
 (transcript purge, draft reminders on day 6 then weekly, the 7-day silence nudge, the
 auto-publish warning and publish) is free.
+
+---
+
+## 6. Social accounts — X and LinkedIn (design §17, requirements §18)
+
+**One-time setup, per platform (admin, in the platform's developer portal):**
+
+*X* — developer.x.com → the existing app (its id and secret are the parked `X_CLIENT_ID` /
+`X_CLIENT_SECRET`):
+1. Confirm the plan allows writes (`POST /2/tweets`) for two users — the free tier's monthly
+   write quota is small.
+2. User authentication settings: OAuth 2.0 on, type **Web App (confidential client)**,
+   permissions **Read and write**.
+3. Callback URIs: `https://<production API origin>/social/x/callback`, the staging origin's,
+   and `http://localhost:8787/social/x/callback` for dev.
+
+*LinkedIn* — linkedin.com/developers → create an app (it must be tied to a LinkedIn Page):
+1. Products: **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn**.
+2. Auth → Authorized redirect URLs: the same three origins with `/social/linkedin/callback`.
+3. Copy the Client ID and Primary Client Secret.
+
+**Secrets (per environment):**
+
+```sh
+wrangler secret put X_CLIENT_ID          --env production   # and X_CLIENT_SECRET
+wrangler secret put LINKEDIN_CLIENT_ID   --env production   # and LINKEDIN_CLIENT_SECRET
+openssl rand -base64 32 | wrangler secret put SOCIAL_TOKEN_KEY --env production
+```
+
+Optional var `LINKEDIN_API_VERSION` (YYYYMM) overrides the default in code when LinkedIn
+retires a version.
+
+**Per user:** set the site URL (admin dashboard → Users → Site URL, e.g.
+`https://afnanalmass.sa`), then the user opens **Profile → Connected accounts → Connect** in
+the app and approves on X and on LinkedIn. **Nobody ever sends a password** — not to the admin,
+not to the app (NFR-11.8).
+
+**Posting is production-only** and stops with `publishing.paused`. A channel shows
+*not connected* when the account is missing or expired — the user reconnects and taps
+**Retry**. LinkedIn connections usually last ~60 days; the app pushes a reminder 7 days
+before.

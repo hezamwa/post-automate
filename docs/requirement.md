@@ -20,7 +20,7 @@ A system that automatically discovers trending topics, generates personalized so
 ```
 Discover topics → Score/filter against profile → Generate draft
   → Derivatives (hero image, X.com version, translation)
-  → Approval → Publish to Sanity → Record outcome
+  → Approval → Publish to Sanity → Post to X / LinkedIn (§18) → Record outcome
 ```
 
 ---
@@ -64,9 +64,11 @@ The Creator Profile is the input to every downstream prompt and is modeled as a 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-3.10 | Profiles MUST be stored as **versioned, immutable records** — never mutated in place — so profile versions can be diffed against content-quality outcomes when personalization drifts. | MUST |
-| FR-3.11 | Users SHOULD be able to update their profile both by re-running the conversational onboarding and by directly editing fields in a settings form (chat for initial capture, form for tweaks). | SHOULD |
+| FR-3.11 | Users MUST be able to edit their profile in a **profile page** in the app: voice, audience, topic policy, cadence, language and translation, channels, AI disclosure, the per-step ask/auto settings (`gates`), scheduled runs (`autoRun`) and social posting mode (FR-3.14). Every save creates a new profile version (FR-3.10). Re-running the conversational onboarding remains a SHOULD. *(Raised from SHOULD 2026-09-24 — the v2 settings had no surface at all.)* | MUST |
 | FR-3.12 | The profile MUST carry a **channels** list (v1 values: `x`, `linkedin`) controlling which social derivatives are generated per article (FR-6.12) — channels are per-user config, never code (FR-2.4). | MUST |
 | FR-3.13 | The profile MUST capture **Translation preference** independently of the primary language (FR-3.7): either off, or a target language into which each article is translated after generation. Translation is opt-in — a user writing in one language only is the default, not a special case. Together these two fields replace the earlier single Arabic/English/bilingual setting; "bilingual" is now expressed as a primary language plus translation enabled. **[OD-3 — revised]** | MUST |
+| FR-3.14 | The profile MUST carry a **social posting mode** — `confirm` (default: the user taps *Post* per channel once the article is live) or `auto` (each approved channel posts as soon as the article is live) — governing §18. *(Added 2026-09-24, OD-27.)* | MUST |
+| FR-3.15 | The profile page MUST include a read-only **"My data"** section showing what the system stores about the user: account record, profile versions, gate choices, edit diffs and revision instructions, drafts by status, connected social accounts (never their tokens), and spend against limits. Deletion stays an admin action (FR-2.6). *(Added 2026-09-24, OD-29.)* | MUST |
 
 ---
 
@@ -150,7 +152,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-6.12 | For every article draft, the pipeline MUST generate a **short social version per channel enabled in the profile's `channels` list** (v1 channels: **X.com** ≤280 chars; **LinkedIn** ≤3,000 chars, professional register) — each text-only, in the creator's voice, reviewed together with the article. Publishing to the channels themselves is out of scope for v1 — the texts are stored with the post for manual use. *(Extended for LinkedIn + per-profile channels 2026-07-16.)* | MUST |
+| FR-6.12 | For every article draft, the pipeline MUST generate a **short social version per channel enabled in the profile's `channels` list** (v1 channels: **X.com** ≤280 chars; **LinkedIn** ≤3,000 chars, professional register) — each text-only, in the creator's voice, reviewed together with the article. *(Extended for LinkedIn + per-profile channels 2026-07-16.)* The texts are stored with the post and, since 2026-09-24, **posted to the creator's connected accounts** once the article is live (§18, OD-27). | MUST |
 | FR-6.13 | For every article draft, the pipeline MUST generate a **hero image** and attach it to the Sanity draft, reviewed and approved together with the article. Medical guardrails extend to imagery: abstract/schematic only, nothing implying real patients or procedures. | MUST |
 | FR-6.14 | **Translation** MUST be an explicit pipeline task — generate in the profile's primary language (FR-3.7), then translate via the configured translation route — never single-call bilingual generation. The task runs only when the profile's translation preference is enabled (FR-3.13). The user MUST be able to override per draft in both directions: request a translation for a draft when the profile has translation off, and skip it for a draft when the profile has it on. *(Revised 2026-08-21: translation is opt-in per FR-3.13, no longer implied by a "bilingual" language setting.)* | MUST |
 | FR-6.15 | Voice narration, video, and code-snippet generation are **routing-ready task types only** (§15) — no product feature in v1. | — |
@@ -162,6 +164,13 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | FR-6.16 | Editorial rules MUST forbid verbatim reproduction of source material beyond short, attributed quotes; every article is an original synthesis that cites its sources. | MUST |
 | FR-6.17 | Fetched source content MUST be treated as **data, never instructions** — stated explicitly in the generation prompts, with human approval as the second net against prompt injection from malicious pages. | MUST |
 | FR-6.18 | **AI disclosure** is a per-profile flag, **default OFF**. When enabled, published posts carry a short "AI-assisted, reviewed by {author}" note; `generationMeta` stays internal either way. **[OD-22 — resolved]** | MUST |
+
+### 6.7 Mood (per article)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-6.19 | When starting a run (**Generate** or **My topic**) the user MAY choose a **mood** for that one article: `normal` (default), `optimistic`, `excited`, `very_excited`, `concerned`, `disappointed`, `critical`. The mood adjusts the profile's voice — it never replaces it — and applies to the article and its channel versions. Scheduled runs use `normal`. The mood is stored on the run, so revisions keep it. **[OD-28]** | MUST |
+| FR-6.20 | `critical` MUST NOT be offered or accepted for a profile with medical guardrails (FR-6.6–6.8). Guardrails and editorial rules outrank every mood: `critical` means a firm, evidence-based critique of ideas and decisions — never personal attacks; `excited` moods never license exaggerated claims. | MUST |
 
 ---
 
@@ -216,6 +225,8 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | DR-9.14 | The database MUST store each draft's **derivatives individually** — kind (hero image, X.com, LinkedIn, translation), content or asset reference, and an outcome of `produced` / `skipped` / `failed` with a human-readable reason. A draft-level blob is not sufficient: FR-15.13 requires per-derivative outcomes, the review screen renders them separately, and the revision loop (FR-7.9) regenerates them one at a time. | MUST |
 | DR-9.15 | Each stored profile payload MUST carry the **schema version it was written against**. Profiles are append-only (DR-9.1) and pipeline runs pin a version, so a schema change must leave historic versions readable rather than unparseable. | MUST |
 | DR-9.16 | The database MUST store **QC results per draft per revision** (§17): check id, class, verdict, human-readable finding, and — for judged checks — the provider/model that produced the verdict. Results are retained with the draft so a rejection can be traced to what QC did or did not catch. | MUST |
+| DR-9.17 | The database MUST store each user's **connected social accounts** — provider, the platform's account id and handle, OAuth access/refresh tokens **encrypted at rest** (NFR-11.8), granted scopes, token expiry, connected-at — one row per user and provider. Disconnecting deletes the row. *(Added 2026-09-24, §18.)* | MUST |
+| DR-9.18 | The database MUST store one **social post record per draft per channel**: status (`awaiting_confirm` / `posted` / `failed` / `not_connected` / `deleted`), the platform post id and the link reply/comment id, the post URL, the human-readable failure reason, and timestamps. The stored post id is what makes a retry post only the missing part, never a duplicate. *(Added 2026-09-24, §18.)* | MUST |
 
 ---
 
@@ -248,6 +259,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | NFR-11.5 | The **global** monthly API spend ceiling is **US$20** — a **hard cap**: the application refuses all AI calls once it is reached (FR-15.10), independently of the AI Gateway cap that backstops it. Default per-user cap: **US$10/month** (configurable, FR-15.8). **[OD-12 — resolved; refined by OD-16]** | MUST |
 | NFR-11.6 | Secrets MUST be rotatable without code changes: rotation = overwrite the Worker secret + re-test the affected routes (FR-15.5 confirms the swap with a human-readable result). Rotate immediately on suspected exposure and at least every 6 months; the per-secret procedure lives in the runbook (NFR-16.3). | MUST |
 | NFR-11.7 | Logs MUST never contain secrets or credentials: Authorization headers, API keys, tokens, and password fields are redacted before any log write (Workers Logs, AI Gateway logs, spend ledger). Auth-route request bodies are never logged raw. | MUST |
+| NFR-11.8 | Users' social-platform access MUST be granted only through each platform's **official OAuth consent flow** — the system MUST NEVER ask for, receive or store a social-platform password. Tokens are encrypted at rest with a server-side key (`SOCIAL_TOKEN_KEY`), never returned by any API, never logged, and revocable by the user both in the app (disconnect) and on the platform itself. *(Added 2026-09-24, OD-27.)* | MUST |
 
 ---
 
@@ -271,7 +283,7 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | **OD-12** | ~~Monthly API budget ceiling~~ **RESOLVED (2026-07-13): US$20/month.** | NFR-11.3, NFR-11.5 | Enforced via AI Gateway caps + max-runs-per-day. |
 | **OD-13** | ~~Content format and target length~~ **RESOLVED (2026-07-12): long-form articles (~800–1,500 words) as primary format; short-form may be added per-profile later.** | FR-6.11 | — |
 | **OD-14** | **RESOLVED (2026-07-13): the AI layer is multi-provider** — Anthropic, OpenAI, Google Gemini, Moonshot, DeepSeek, Qwen (extensible) — with admin-managed routing (global default + per-user override per task type) and platform-owned API keys stored server-side. *Extended same day: + xAI Grok, Manus, Brave Search.* | §15, AR-10.9 | Users never supply or see provider keys (no BYOK). |
-| **OD-15** | **RESOLVED (2026-07-13): v1 derivative features = X.com short version, hero image, translation.** Voice, video, and code snippets stay routing-ready task types only. *Extended 2026-07-16: + LinkedIn version; channel derivatives are driven by a per-profile `channels` list (FR-3.12).* | FR-6.12–6.15 | Publishing directly to X.com/LinkedIn deferred. |
+| **OD-15** | **RESOLVED (2026-07-13): v1 derivative features = X.com short version, hero image, translation.** Voice, video, and code snippets stay routing-ready task types only. *Extended 2026-07-16: + LinkedIn version; channel derivatives are driven by a per-profile `channels` list (FR-3.12).* | FR-6.12–6.15 | Publishing directly to X.com/LinkedIn deferred — *lifted 2026-09-24 by OD-27 (§18).* |
 | **OD-16** | **RESOLVED (2026-07-13): per-user spend cap defaults to US$10/month** (configurable per user) inside the global US$20 ceiling. | FR-15.8, NFR-11.5 | — |
 | **OD-17** | **RESOLVED (2026-07-13): admin interface = separate web dashboard** (hosted alongside the existing Workers sites), consuming the same `/admin/*` API; Flutter stays user-only. | FR-2.5 | Same JWT flow; `role=admin` required. |
 | **OD-18** | **RESOLVED (2026-07-13): topic dedup = 30-day exclusion window, per user.** | FR-5.7 | Cross-user dedup skipped — disjoint domains. |
@@ -283,6 +295,9 @@ User prompt   = topic brief (title, why trending, source links, angle)
 | **OD-24** | **RESOLVED (2026-07-13): draft discard & revision loop** — reject captures a reason category (quality / changed-mind / other), deletes the Sanity draft, purges markdown; scheduled publishes are cancellable; request-revision regenerates with user instructions (≤3 per draft, metered, instructions feed refinement); change-angle reruns from a stored proposal. | FR-7.8–7.9, DR-9.12 | Discards still count toward the 30-day dedup. |
 | **OD-26** | **RESOLVED IN SHAPE (2026-08-21): an automated QC layer runs between generation and human review** — deterministic checks plus a routed LLM judge, hard findings trigger one regeneration then flag for review, soft findings annotate only, and the whole stage degrades to deterministic-only rather than blocking. **Deferred to Phase 5 design:** score thresholds, the final check catalogue, and the judge prompt. | §17, FR-17.1–17.10, DR-9.16 | Deliberately advisory-by-default: with mandatory human approval (FR-7.1–7.2) a blocking QC layer would add an outage surface without adding a safeguard. Its value rises if the tech user ever moves to `auto_publish` (OD-4), which FR-17.1 anticipates. |
 | **OD-25** | **RESOLVED (2026-08-21): operational control = three independent kill switches enforced at their point of effect** — AI paused (pre-call gate), publishing paused (publish step), runs paused (run entry) — plus reversible per-user suspend, typed flag storage with change audit, and skip-not-fail behaviour when an optional task type has no enabled route. A single pipeline-level flag checked only at run entry was **rejected**: the approval wait means a run can begin before a pause and publish days after it. | FR-2.7, FR-15.12–15.14, DR-9.13 | These are operational controls, not product feature flags. Per-capability disable rides on the existing `ai_routes.enabled` (FR-15.3) rather than introducing a second mechanism. |
+| **OD-27** | **RESOLVED (2026-09-24): post to X.com and LinkedIn directly, for both users.** Each user connects their own accounts through the platforms' OAuth consent (never a password). The post is the approved channel text **only**; the link to the live article follows as a **reply on X** and the **first comment on LinkedIn**. Timing is a per-user profile setting — `confirm` (default) or `auto` right after the article goes live. No image upload. | §18, FR-3.14, FR-6.12, DR-9.17–9.18, NFR-11.8 | Supersedes the "deferred" note on OD-15. LinkedIn tokens for a standard app last ~60 days with no refresh, so reconnecting is a recurring user step (FR-18.7). X posting needs an API plan that allows writes. |
+| **OD-28** | **RESOLVED (2026-09-24): per-article mood.** `normal` (default) · `optimistic` · `excited` · `very_excited` · `concerned` · `disappointed` · `critical`. `angry` was rejected as a reputational risk; `critical` is its firm, evidence-based substitute and is unavailable to medical profiles. | FR-6.19–6.20 | A per-run choice, not a profile field: the occasion sets the mood, the profile sets the voice. |
+| **OD-29** | **RESOLVED (2026-09-24): a profile page with a read-only "My data" section.** Users edit their own profile (every save a new version) and see what is stored about them; deletion stays admin-only. | FR-3.11, FR-3.15 | No self-service export or deletion yet. |
 
 ---
 
@@ -326,6 +341,13 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 - QC panel in admin monitoring (FR-17.10).
 - **Entry criterion:** enough reviewed drafts to know which failures actually recur — building the catalogue before that is guesswork.
 
+### Phase 6 — Creator controls & social publishing *(added 2026-09-24)*
+1. The Flutter app catches up with the v2 workflow: every gate answerable in the app (with free text), channels ticked on the approve screen, the publish gate, stale drafts, quality findings, the busy-Generate deep link; the admin dashboard gains the auto-publish toggle and the full budget breakdown.
+2. Per-article mood (FR-6.19–6.20).
+3. Profile page + "My data" (FR-3.11, FR-3.14–3.15).
+4. Connecting X and LinkedIn accounts (FR-18.1, FR-18.7, NFR-11.8).
+5. Posting to X and LinkedIn after publish (FR-18.2–18.6, FR-18.8).
+
 ---
 
 ## 14. Out of Scope
@@ -338,7 +360,10 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 - Any connection to hospital systems or patient data (FR-6.7).
 - Running C# anywhere on Cloudflare — Blazor WASM on Pages is client-side only; Containers is beta with sleep-on-idle. Evaluated and rejected under OD-5.
 - Voice narration, video, and code-snippet generation as product features — routing-ready task types only (FR-6.15).
-- Publishing directly to X.com — v1 generates the short text only (FR-6.12).
+- ~~Publishing directly to X.com~~ — brought into scope 2026-09-24 (§18, OD-27).
+- Uploading the hero image to X or LinkedIn — the social post is text; the link reply/comment carries the article (OD-27).
+- Asking for, receiving or storing a social-platform password — access is OAuth-only, permanently (NFR-11.8).
+- Self-service data export or deletion — "My data" is read-only; erasure is an admin action (FR-3.15, FR-2.6).
 - Per-user provider API keys (BYOK) — platform keys only (OD-14).
 - Duplicating published post bodies in the application database (DR-9.6).
 
@@ -401,3 +426,18 @@ Ordering is deliberate: it front-loads the biggest risk (content quality) so fai
 | FR-17.8 | The judged checks SHOULD default to a **different provider than the one that generated the article**. A model grading its own output is the weakest form of this check, and the multi-provider router (FR-15.1) already makes the alternative free to configure. | SHOULD |
 | FR-17.9 | Deterministic checks MUST be written as pure functions reusable by the golden-set regression (NFR-16.1), so a check is defined once and serves both deploy-time prompt testing and run-time QC. | MUST |
 | FR-17.10 | QC results MUST be visible in admin monitoring (FR-15.11): pass/warn/fail rates by check over time. A check that never fires and one that always fires are both signals — the first is dead weight, the second is a prompt problem. | SHOULD |
+
+---
+
+## 18. Social Publishing (FR-18) — *added 2026-09-24, OD-27*
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-18.1 | Each user MUST be able to **connect and disconnect** their X.com and LinkedIn accounts from the profile page. Connecting opens the platform's own OAuth consent page (X: OAuth 2.0 with PKCE; LinkedIn: OpenID sign-in + `w_member_social`); the user logs in **on the platform**, and the system receives only a scoped token (NFR-11.8). | MUST |
+| FR-18.2 | Once an article is **live**, each channel that was ticked at the derivatives gate, produced, and connected MUST be posted as the approved channel text **only**. The link to the live article MUST then follow as a **reply to the post on X** and as the **first comment on the LinkedIn post**. | MUST |
+| FR-18.3 | Timing follows the profile's social posting mode (FR-3.14): `auto` posts as soon as the article is live — including a scheduled publish by the hourly publisher; `confirm` records the channel as awaiting confirmation and the user taps **Post** on the draft. | MUST |
+| FR-18.4 | Social posting MUST happen only in the production Worker (FR-8.5) and MUST be held by `publishing.paused` (FR-15.12b) exactly like the article itself. | MUST |
+| FR-18.5 | Each channel's outcome MUST be recorded (DR-9.18) and shown on the draft: posted (with a link to the post), awaiting confirmation, not connected, or failed with a human-readable reason. A social failure MUST NEVER affect the published article. A failed or unconnected channel can be retried from the app; a retry posts only what is missing (never a second post). | MUST |
+| FR-18.6 | An urgent retract (FR-7.6) MUST also delete the channel posts made for that article, best-effort; a failed deletion is reported, not retried silently. | MUST |
+| FR-18.7 | Token expiry MUST be visible: the profile page shows each connection's state (connected, expiring, expired). A LinkedIn connection without a refresh token MUST trigger a reconnect push 7 days before it expires. An expired or revoked connection makes auto posting record `not_connected` rather than fail silently. | MUST |
+| FR-18.8 | The live article's URL MUST be built from data: the user record carries the site's base URL (`site_url`), and the per-site mapper adds the path (`/{lang}/blog/{slug}`; Afnan's `em` posts `/{lang}/em-blog/{slug}`). Without a `site_url` the channel records `failed` with that reason — never a post with a broken link. | MUST |

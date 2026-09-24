@@ -244,6 +244,29 @@ spend_ledger         · cache_read_tokens · cache_write_tokens
 ai_models            · cached_input_per_mtok_usd · cache_write_per_mtok_usd
 ```
 
+**Added with creator controls & social publishing (2026-09-24, requirements §13 Phase 6):**
+
+```
+users                · site_url text nullable   -- live site base URL, e.g. https://afnanalmass.sa
+                                                -- — the article link in social posts (FR-18.8)
+pipeline_runs        · mood (normal|optimistic|excited|very_excited|concerned|disappointed|critical)
+                       default normal           -- FR-6.19; set at run start, kept by revisions
+profiles.payload     · socialPosting (confirm|auto) default confirm   (FR-3.14 — additive, shape v2)
+social_accounts      id PK · user_id FK · provider (x|linkedin) · account_id · handle
+                     · access_token_enc · refresh_token_enc nullable   -- AES-GCM, SOCIAL_TOKEN_KEY
+                     · scopes · expires_at · refresh_expires_at nullable
+                     · expiry_reminded_at nullable · connected_at · updated_at
+                     -- UNIQUE(user_id, provider); disconnect deletes the row   (DR-9.17)
+oauth_states         state PK · user_id FK · provider · code_verifier nullable · redirect_uri
+                     · expires_at (10 min) · created_at
+                     -- single-use: the callback deletes the row it consumes   (§17)
+social_posts         id PK · draft_id FK · user_id FK · channel (x|linkedin)
+                     · status (awaiting_confirm|posted|failed|not_connected|deleted)
+                     · post_id · reply_id · post_url · reason · posted_at · created_at · updated_at
+                     -- UNIQUE(draft_id, channel). post_id is written the moment the post
+                     -- succeeds, so a retry only adds the missing link reply   (DR-9.18)
+```
+
 **Retention job**: the daily dispatcher also deletes `onboarding_sessions` rows past `purge_after` (OD-7).
 
 ---
@@ -356,6 +379,9 @@ Stored in `profiles.payload`; versioned and immutable (FR-3.10). This same schem
       "type": "array",                                       // to generate (default: both)
       "items": { "type": "string", "enum": ["x", "linkedin"] }
     },
+    "socialPosting": {                                       // FR-3.14 — when approved channel
+      "type": "string", "enum": ["confirm", "auto"]          // texts are posted (§17);
+    },                                                       // default "confirm"
     "compliance": {                                          // FR-3.9 — required when
       "type": "object", "additionalProperties": false,       // domain.field == "medical"
       "required": ["noDiagnosis", "noDosage", "noCaseReferences", "disclaimerText"],
@@ -701,6 +727,27 @@ System: EDITORIAL_RULES + VOICE + AUDIENCE + GUARDRAILS + FEW_SHOT
 User: TOPIC_BRIEF + selected ANGLE (headline, thesis, outline)
 ```
 
+### Mood block (FR-6.19–6.20 — added 2026-09-24)
+
+The run's `mood` adds one line to the VOICE block of the article, revision and channel prompts
+(`draft`, `derive-x`, `derive-linkedin`); `normal` adds nothing. Translation keeps the tone of
+its source, so it needs none. Composition order puts the mood **before** GUARDRAILS, which
+therefore still have the last word.
+
+```
+MOOD (not for normal): "For this piece, lean {mood}: {guidance}. This adjusts the
+  creator's usual voice — keep their formality, sentence length and policies. Never let
+  the mood add claims the sources do not support."
+  optimistic    hopeful and forward-looking; emphasise opportunities and progress
+  excited       energetic and enthusiastic about what is new
+  very_excited  high-energy and celebratory — still precise, no hype words or superlatives
+                the sources do not earn
+  concerned     serious and careful; name the risks plainly, without alarmism
+  disappointed  candid about what fell short; measured and constructive
+  critical      a firm, evidence-based critique of ideas and decisions — never of people
+                (refused with 400 for a profile with medical guardrails)
+```
+
 ### Templates: derivatives (FR-6.12–6.14)
 
 ```
@@ -764,19 +811,25 @@ version** (never mutate, FR-3.10).
 | `/auth/fcm-token` | POST | `{token}` — the app refreshes its FCM device token on launch (§9; row added 2026-08-21 — the push flow was unreachable without it) |
 | `/onboarding/turn` | POST | One interview turn; server merges partial profile (FR-4.1–4.2) |
 | `/onboarding/confirm` | POST | Persist confirmed profile as new version (FR-4.3) |
-| `/profile` | GET/PATCH | Read active profile; PATCH creates a new version (FR-3.11 form edits) |
+| `/profile` | GET/PATCH | Read the active profile + its version; PATCH takes the **whole** payload, validates it against `profileSchema` (400 with the first issue) and appends a new active version (FR-3.10–3.11). Medical guardrails cannot be removed — `compliance` is required by the schema for a medical domain |
+| `/me/data` | GET | "My data" (FR-3.15), read-only: account record (no password hash), profile versions (version, status, created), gate choices, edit diffs, revision instructions, drafts by status, connected social accounts (provider, handle, scopes, expiry — never tokens), month-to-date spend and limits (incl. `autoPublish`) |
+| `/social/accounts` | GET | The user's connections: `{ provider, handle, connectedAt, expiresAt, state: connected\|expiring\|expired }[]` — never tokens (FR-18.7) |
+| `/social/:provider/connect` | POST | `provider = x\|linkedin`. Creates a single-use `oauth_states` row and returns `{ authorizeUrl }` for the app to open in the browser (FR-18.1). 503 while the provider's client secrets are unset |
+| `/social/:provider/callback` | GET | **Unauthenticated** — the `state` row authenticates it. Exchanges the code, reads the account id + handle, stores the encrypted tokens, deletes the state row, and answers a small HTML page ("Connected — return to the app"). A bad or expired state gets the same page with the reason |
+| `/social/:provider` | DELETE | Disconnect: revokes at the platform where supported (X), deletes the row. LinkedIn has no member-token revoke — the page tells the user where to remove the app on LinkedIn |
+| `/drafts/:id/social/:channel` | POST | Post (confirm mode) or retry (failed / not connected) one channel of a **published** draft — posts only what is missing (FR-18.3, FR-18.5). 409 unless the draft is published and the channel was produced; 503 while `publishing.paused` |
 | `/drafts` | GET | Pending + historical drafts queue, each with its latest-revision derivative outcomes (DR-9.14). Bodies stay in Sanity (DR-9.6) |
-| `/drafts/:id` | GET | Review-screen detail: the markdown (the app's editing source of truth until publish, DR-9.11), latest derivatives, `qualityCheck` findings, `stale` / `seenAt` / `channels`, run state + stored angle proposals + outline, the `medical` / `supportsBlogType` flags, the **derivatives gate** (`gates.derivatives`: setting, options, preselected) and publish setting, and the read-only `autoPublish` flag. The owner's first open sets `seen_at` |
+| `/drafts/:id` | GET | Review-screen detail: the markdown (the app's editing source of truth until publish, DR-9.11), latest derivatives, `qualityCheck` findings, `stale` / `seenAt` / `channels`, run state + stored angle proposals + outline, the `medical` / `supportsBlogType` flags, the **derivatives gate** (`gates.derivatives`: setting, options, preselected) and publish setting, and the read-only `autoPublish` flag, plus `socialPosts` (per channel: status, post URL, reason — FR-18.5). The owner's first open sets `seen_at` |
 | `/drafts/:id/decision` | POST | `{action: approve\|reject\|revise\|change_angle, editedMarkdown?, publishMode?, channels?, instructions?, angleIndex?, rejectionCategory?, blogType?}` — whole payload validated (400). Live instance → Workflow event. Stale draft: revise/change_angle → 409 with the reason; approve/reject → direct handling (derivatives → publish). `channels` is the derivatives gate; `blogType` Afnan's per-draft choice (§8) (FR-6.9, FR-7.5, FR-7.8–7.9) |
 | `/drafts/:id/hold` | POST | The publish gate's **hold** when the run is waiting there (back to the queue), or the auto-publish warning's Hold (`auto_publish_held_at`); 409 when neither applies |
 | `/drafts/:id/cancel-schedule` | POST | Cancel a scheduled publish before `publish_at`; draft returns to pending review (FR-7.8) |
-| `/drafts/:id/retract` | POST | Urgent unpublish of a published post (FR-7.6); edits stay in Studio |
+| `/drafts/:id/retract` | POST | Urgent unpublish of a published post (FR-7.6); edits stay in Studio. Also deletes the draft's X / LinkedIn posts, best-effort; the response lists any that could not be deleted (FR-18.6) |
 | `/drafts/:id/derivatives/translation` | POST/DELETE | Per-draft translation override (FR-6.14): POST `{targetLanguage}` requests one for a draft whose profile has translation off; DELETE drops one the profile produced. Runs standalone against the `translate` route — it does **not** re-enter the Workflow, since the article is already final and only the derivative changes. Writes a `draft_derivatives` row (DR-9.14). Refused once the draft is published. *(Semantics fixed 2026-08-21: an unroutable/failing translation returns 200 with the recorded `failed` row and its reason — an outcome, not a transport error; gate refusals return 503.)* |
 | `/runs` | GET | Pipeline run history + states (debugging/metrics) |
-| `/runs/trigger` | POST | The **Generate** button — discovery picks the topic. **409 `{ error, existingDraftId }`** while the user has an undecided draft (the app opens it instead); 503 while `runs.paused`. *(No topic here: `/runs/request` is the only entry for user topics, so the FR-7.7 warn-and-override flow cannot be bypassed)* |
+| `/runs/trigger` | POST | The **Generate** button — discovery picks the topic. Optional body `{ mood? }` (FR-6.19; `critical` → 400 for a medical profile). **409 `{ error, existingDraftId }`** while the user has an undecided draft (the app opens it instead); 503 while `runs.paused`. *(No topic here: `/runs/request` is the only entry for user topics, so the FR-7.7 warn-and-override flow cannot be bypassed)* |
 | `/runs/:id` | GET | One payload to render any gate: `run` (state, `gate`, chosen topic/angle, outline, image concepts…), `gate` (the waiting gate's name and options, or null), `choices` (every gate choice so far) |
 | `/runs/:id/gates/:gate` | POST | Answer the gate the run is waiting on — `{ optionId }`, `{ freeText }`, edited `{ sections }` (outline) or `{ optionId, edits }` (publish); validated against the gate's choice schema (400); 409 unless the run is waiting on that gate. Gates: topic, angle, outline, image, publish |
-| `/runs/request` | POST | User-requested topic run: `{title, notes?, links[]?, overrideBannedTopics?}`; response carries dedup/banned-topic warnings (FR-5.8, FR-7.7) |
+| `/runs/request` | POST | User-requested topic run: `{title, notes?, links[]?, overrideBannedTopics?, mood?}`; response carries dedup/banned-topic warnings (FR-5.8, FR-7.7) |
 | `/runs/:id/angle` | POST | *Deprecated alias* for `/runs/:id/gates/angle` (`{angleIndex}` → `{ optionId }`) kept for the shipped app |
 | `/webhooks/sanity` | POST | Publish confirmations + Studio-edit capture; HMAC-verified (FR-8.6) |
 | `/metrics` | GET | Topics surfaced, approval rate, edit distance, per-user spend (FR-15.7) |
@@ -787,6 +840,7 @@ version** (never mutate, FR-3.10).
 | `/admin/monitor` | GET | Global dashboard: spend by user/provider/task/day, cap status, route health, run stats (FR-15.11) |
 | `/admin/budget` | GET/PATCH | View/raise the global hard cap; % consumed, projected month-end (FR-15.10), and `breakdown`: by task type, by model (with cached tokens), by run outcome (published / rejected / abandoned / skipped / failed / in progress / unattributed), `publishedArticles`, `costPerPublishedArticleUsd` (all spend ÷ published) and `directCostPerPublishedArticleUsd` |
 | `/admin/users` | GET/POST | List users; create a user — data, not code (FR-2.5) |
+| `/admin/users/:id` | PATCH | `{ siteUrl }` — the live site base URL used for article links in social posts (FR-18.8); `null` clears it |
 | `/admin/users/:id` | DELETE | Offboard a user: cascade-delete personal records, anonymize spend ledger, unassign Sanity authorship (FR-2.6) |
 | `/admin/users/:id/suspend` | POST/DELETE | Suspend / reactivate a user; POST body `{reason}` (FR-2.7) |
 | `/admin/flags` | GET | Current value + default + last change (who/when) for every declared flag (FR-15.14) |
@@ -826,6 +880,8 @@ Publishing obligations this adds (owned by a **per-site mapper** in `modules/pub
 - translation (FR-6.14) maps per site: Waleed = one document per language (his `language` field — a translated draft ⇒ two documents), Afnan = a second document linked via `translation.metadata` (her i18n plugin); the second document is written only when `profile.translation.enabled` produced one (FR-3.13). *(Implemented 2026-08-21: the translated edition is created **at publish time** from the draft's current-revision produced translation row — one approval covers both editions, revisions never desync, and a stale earlier-revision translation can never publish. The `translate` task returns structured {title, excerpt, imageAlt, markdown} so the second document is fully in the target language; deterministic ids `postauto-{runId}-{lang}` and `postauto-{runId}-i18n`; the metadata document uses WEAK references so retract (FR-7.6) — which covers both editions — is never blocked; a translated-edition failure logs and never rolls back the primary publish.)*
 - **no author reference** — both are single-author sites (`identity.sanityAuthorId` dropped from the profile).
 
+**Article URL (FR-18.8 — added 2026-09-24):** the social link is `users.site_url` + a per-site path from the mapper: Waleed `/{lang}/blog/{slug}`, Afnan `/{lang}/blog/{slug}` or `/{lang}/em-blog/{slug}` by `blogType` (both sites always prefix the locale). `lang` and `slug` come from the **published** document, so the link is exactly what went live.
+
 **Draft-first flow (FR-8.1):** the Worker creates `drafts.draft-{runId}` via the Mutations API with the write-scoped token; approval triggers the publish action for that ID. Generated hero images are uploaded to Sanity's assets API first, then referenced from the site's image field (`image` / `featuredImage`) with generated alt text — the image, channel versions, and translation all live on the same draft, so one approval covers everything.
 
 **Markdown → Portable Text (FR-8.3):** in-Worker conversion via a direct `marked`-lexer → Portable Text converter (`modules/publishing/portable-text.ts`) — no HTML intermediary, no DOM shim. It emits only what the sites' block types allow (normal/h2–h4/blockquote, bullet/number lists, strong/em/code marks, link annotations); unknown constructs flatten to text rather than being lost. Never ask the LLM for Portable Text. *(Implemented 2026-07-16, replacing the earlier `@sanity/block-tools` + `linkedom` plan — verified against the live schema: 35-block article round-tripped.)*
@@ -836,7 +892,7 @@ Publishing obligations this adds (owned by a **per-site mapper** in `modules/pub
 
 ## 9. Push Notifications
 
-FCM HTTP v1 from the Worker: the service-account JSON lives in a secret; the Worker mints the OAuth JWT with WebCrypto (RS256) and posts to FCM. `users.fcm_token` is refreshed by the Flutter app on launch. Sent on: draft ready (FR-7.1), run failed, draft expiring in 24h.
+FCM HTTP v1 from the Worker: the service-account JSON lives in a secret; the Worker mints the OAuth JWT with WebCrypto (RS256) and posts to FCM. `users.fcm_token` is refreshed by the Flutter app on launch. Sent on: draft ready (FR-7.1), run failed, draft expiring in 24h. *(2026-09-24:)* a LinkedIn connection expiring in 7 days (FR-18.7), and a channel whose auto post failed (FR-18.5).
 
 ---
 
@@ -936,6 +992,7 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 | NFR-11.7 (redaction) | Central logger middleware strips `Authorization`/`x-api-key` headers and password/token fields before every log write; auth-route bodies never logged raw — asserted by a unit test |
 | FR-2.6 (erasure) | `/admin/users/:id` DELETE cascades personal rows, anonymizes `spend_ledger` (`user_id → NULL`, totals kept), unassigns Sanity author |
 | Webhook integrity | HMAC verification on `/webhooks/sanity`; FCM tokens scoped per user |
+| NFR-11.8 (social access) | OAuth consent only (§17) — no password field exists anywhere; tokens AES-GCM encrypted with `SOCIAL_TOKEN_KEY` before they touch the DB, never serialised by any route, covered by the redaction test; single-use 10-minute `state`; X uses PKCE |
 
 ---
 
@@ -947,6 +1004,7 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 | **2 — Approval + Flutter shell** | Auth routes, drafts queue API (article + image + X text in one approval), approval `waitForEvent` + decision endpoint, FCM, medical user seed + guardrails block, compliance checklist UI, publish-now/next-slot + hourly publisher (FR-7.5), retract endpoint + button (FR-7.6), pending-draft gate (FR-7.4), **revision loop + reject categories + cancel-scheduled** (FR-7.8–7.9), **user-requested topic flow + angle picker** (FR-5.8, `/runs/request`), **admin routing/health/test endpoints + per-user limit management** (§7 admin routes), **admin web dashboard v1** (§15), **remaining kill switches** (`publishing.paused`, `runs.paused`) **+ `/admin/flags*` endpoints + switch panel in `/admin/monitor`** (§10.1), **per-user suspend/reactivate** (FR-2.7), **derivative skip-not-fail policy** (§5, FR-15.13), **per-draft translation override** on the review screen (FR-6.14). |
 | **3 — Conversational onboarding** | `/onboarding/*` routes, interview prompt + structured extraction, profile confirm/versioning, settings form (FR-3.11). |
 | **4 — Automation + feedback** | Cron dispatcher, per-user cadence, edit-diff capture on decision + Sanity webhook, refinement job, `/metrics`, transcript purge job. |
+| **6 — Creator controls & social** *(2026-09-24)* | Flutter v2 catch-up (every gate answerable, channels on approve, publish gate, stale/quality/declined, busy-Generate deep link) + admin auto-publish toggle and budget breakdown · `pipeline_runs.mood` + MOOD block · `/profile`, `/me/data` + profile page · `social_accounts`, `oauth_states`, `/social/*` + connect UI · `social_posts`, posting after publish, `/drafts/:id/social/:channel`, retract deletes posts, LinkedIn expiry reminder (§17). |
 | **5 — Automated QC** *(planned, §16)* | `qc_checks` table, deterministic check suite shared with the golden set, `qc_review` task type + judge prompt + route seed, `qc` Workflow step with regenerate-once, QC annotations on the review screen, QC panel in `/admin/monitor`. |
 
 ---
@@ -985,8 +1043,11 @@ Monitoring is **active**: threshold breaches (80%/100% global, 80%/100% per user
 **Flutter app (users):**
 login · drafts queue · **new post — request a topic (title/notes/links) and pick an angle from the 3 proposals** (FR-5.8, FR-6.3) · draft review — article, hero image, channel versions (X / LinkedIn per profile), translation toggle, compliance checklist (medical), actions: approve-now / approve-next-slot / edit / revise-with-instructions (≤3, FR-7.9) / change-angle / reject-with-category (FR-7.8) · cancel a scheduled publish · retract button on published posts (FR-7.6) · onboarding chat · profile settings form (FR-3.11) · my spend & limits view · notifications.
 
+*(Updated 2026-09-24 for the v2 workflow and Phase 6:)* **Generate** and **My topic** carry a mood picker (FR-6.19; `critical` hidden for medical profiles) · a busy Generate (409 `existingDraftId`) opens the waiting draft · **run screen** renders whichever gate the run waits on from `GET /runs/:id` — topic, angle, outline (approve / edit sections / request another), image (concepts or no image) — each with a free-text answer · the approve sheet carries the X / LinkedIn / Arabic checkboxes when `gates.derivatives` is `ask` · **publish gate** screen: the produced texts (editable), now / next slot / hold · stale drafts grey out revise and change angle · quality-check findings on the review screen · `declined` shows as "not requested", not an issue · auto-publish warning with **Hold** · per-channel social status on published drafts with **Post** / **Retry** · **Profile** tab: the settings form (FR-3.11), connected accounts with Connect / Disconnect / reconnect state (FR-18.1, FR-18.7), and the read-only **My data** section (FR-3.15).
+
 **Admin web dashboard (separate small web app alongside the existing Workers sites — OD-17):**
 monitor (spend / caps / route health / run stats + the §10.1 switch panel) · AI routes CRUD with per-route test button showing the stored human-readable result (FR-15.5) · per-user limits · global budget · user management (create user, FR-2.5; suspend/reactivate, FR-2.7; erase, FR-2.6) · run explorer (states, errors, rejected topics with reasons) — *deferred 2026-08-21: needs an `/admin/runs` cross-user listing that §7 does not define (GET /runs is owner-scoped, FR-2.3); v1 shows the monitor's run counts instead*.
+*(Added 2026-09-24:)* per-user **auto-publish** toggle (refused for medical profiles, audited) and **site URL** on the Users view; the Monitor's spend breakdown shows by task, by model and by run outcome with cost per published article.
 Same Worker API, same JWT flow, `role=admin` required — the dashboard has no backend of its own.
 
 **Web as a Flutter target** *(noted 2026-08-21)*: the docs promise a mobile client; the web build
@@ -1064,3 +1125,87 @@ stay near the noise floor.
 - Whether translation fidelity is judged against the source article or independently re-translated
   and compared — the second is stronger and roughly doubles the cost.
 - Whether repeated hard fails should feed profile refinement (FR-6.10) automatically.
+
+---
+
+## 17. Social Publishing (§18 requirements) — *added 2026-09-24*
+
+Module `modules/social/`, one file per concern: `crypto.ts` (AES-GCM seal/open), `x.ts` and
+`linkedin.ts` (each provider's OAuth + post + reply/comment + delete, raw `fetch`),
+`oauth.ts` (authorize URL + state), `accounts.ts` (token load, refresh, persist), `post.ts`
+(orchestration per draft and channel). Routes in `api/social.ts`.
+
+### Connecting (FR-18.1, NFR-11.8)
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant API as Worker API
+    participant P as X / LinkedIn
+    App->>API: POST /social/x/connect (JWT)
+    API->>API: oauth_states row (state, PKCE verifier, 10 min)
+    API-->>App: { authorizeUrl }
+    App->>P: open authorizeUrl in the browser
+    P->>P: user logs in on the platform and approves
+    P->>API: GET /social/x/callback?code&state
+    API->>P: exchange code (+ verifier) → tokens; read account id + handle
+    API->>API: seal tokens, upsert social_accounts, delete state
+    API-->>App: "Connected — return to the app" page
+    App->>API: GET /social/accounts (on return)
+```
+
+| | X | LinkedIn |
+|---|---|---|
+| Flow | OAuth 2.0 authorization code + **PKCE (S256)**, confidential client (Basic auth) | OAuth 2.0 authorization code; OpenID Connect for the member id |
+| Scopes | `tweet.read tweet.write users.read offline.access` | `openid profile w_member_social` |
+| Account id / handle | `GET /2/users/me` → `id`, `username` | `GET /v2/userinfo` → `sub` (member id), `name` |
+| Token life | access 2 h; **rotating** refresh token | access ~60 days; refresh only for approved partner apps — otherwise reconnect (FR-18.7) |
+| Secrets | `X_CLIENT_ID`, `X_CLIENT_SECRET` | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` |
+
+The redirect URI is `{API origin}/social/{provider}/callback`, derived from the request, so
+every environment's origin must be registered in both platforms' app settings (runbook §6).
+`SOCIAL_TOKEN_KEY` (32 random bytes, base64) seals every token; rotating it means everyone
+reconnects, which is acceptable at this size.
+
+### Posting (FR-18.2–18.5)
+
+`publishApprovedDraft` is already the single choke point for publish-now, the hourly publisher
+and direct handling (§5.1), so posting hangs off its end — **after** the article and its
+translated edition are live, best-effort, never rolling anything back:
+
+1. For each channel whose derivative row at the current revision is `produced`, upsert a
+   `social_posts` row. Unticked or unproduced channels get no row.
+2. No connection (or an expired one) → `not_connected`. Profile `socialPosting = confirm` →
+   `awaiting_confirm`. Otherwise post now.
+3. **Post**: refresh the token if it expires within a minute (persisting a rotated refresh
+   token), post the text, **write `post_id` and `post_url` immediately**, then post the link —
+   an X reply (`reply.in_reply_to_tweet_id`) or a LinkedIn comment
+   (`/rest/socialActions/{urn}/comments`) — and write `reply_id`. A failure after the post
+   leaves `post_id` set and status `failed`; the retry posts only the reply.
+4. Guards, checked on every attempt: production Worker only (FR-8.5), `publishing.paused`
+   holds (FR-18.4), and a missing `users.site_url` fails with that reason (FR-18.8).
+
+Text rules: X text is the approved ≤280-char version; the reply is the article URL alone.
+LinkedIn commentary is escaped for LinkedIn's "little text" format, with `#tag` rewritten as a
+hashtag template so hashtags stay clickable; the first comment is the URL alone. The
+`LinkedIn-Version` header comes from `LINKEDIN_API_VERSION` (default in code) — LinkedIn
+retires versions after about a year, so bump it when the API starts refusing.
+
+`POST /drafts/:id/social/:channel` runs step 3 for one channel: the confirm tap and the retry
+are the same call. An auto post that fails sends one push (§9).
+
+### Retract and expiry (FR-18.6–18.7)
+
+Retract deletes each `posted` row's post on the platform (the reply/comment goes with it) and
+marks it `deleted`; a failed deletion stays `posted` with the reason, and the retract response
+names it. The daily dispatcher pushes "Reconnect LinkedIn" once when a connection without a
+refresh token is within 7 days of `expires_at` (`expiry_reminded_at` stops repeats; a
+reconnect clears it).
+
+### Verify at build time
+
+The endpoints above are from each platform's current public docs as of 2026-09. Check before
+the first live post: the X app's plan allows `POST /2/tweets` for both users; the LinkedIn app
+has **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn** products; that
+`w_member_social` covers comments on the member's own post; and that `LINKEDIN_API_VERSION` is
+an active version.

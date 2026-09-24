@@ -27,6 +27,8 @@ alive across every gate; if it times out at the draft gate, the draft survives i
 | Pending-drafts rule | skip when 2 pending | skip when **1** pending; a tap opens the pending draft |
 | Auto-publish | — | admin-only flag, default off, blocked for medical profiles |
 | Step granularity | some steps bundle 2–3 billable calls | **one billable call per step** — a failed call never re-bills a successful one |
+| Mood *(2026-09-24)* | — | chosen per article at **Generate** / **My topic**; `normal` by default (§2) |
+| Social *(2026-09-24)* | texts stored for manual posting | **posted to X and LinkedIn** once the article is live — text, then the link as a reply / first comment (§6.1) |
 
 ---
 
@@ -81,7 +83,8 @@ flowchart TD
     GP -->|hold| W
     SCH --> PUB
     PUB --> LIVE["published<br/>+ translated edition"]
-    LIVE --> REC["record<br/>run closed · choices stored"]
+    LIVE --> SO["social posts<br/>auto or confirm (§6.1)"]
+    SO --> REC["record<br/>run closed · choices stored"]
 ```
 
 Any pre-draft gate (`topic`, `angle`, `outline`, `image`) left unanswered for 30 days ends the
@@ -99,6 +102,11 @@ All three create one `pipeline_runs` row and one Workflow instance keyed to it.
 | **Generate** (primary) | [`POST /runs/trigger`](../codebase/apps/backend/src/api/runs.ts) | the home-screen button. Refused while `runs.paused` (FR-15.12c). If the user already has an undecided draft, the app opens that draft instead of starting a run |
 | User topic | [`POST /runs/request`](../codebase/apps/backend/src/api/runs.ts) | banned-topic collision → 409 until resubmitted with `overrideBannedTopics: true`; 30-day dedup similarity warns but never blocks (FR-7.7) |
 | Scheduled (opt-in) | cron `0 6 * * *` → [`dailyDispatch`](../codebase/apps/backend/src/cron/dispatch.ts) | launches only for users with `profile.autoRun = true` *and* `last_active_at` within 7 days *and* today in `cadence.preferredDays`. Everyone else gets nothing — no run, no spend |
+
+**Mood** (FR-6.19): Generate and My topic take an optional `mood` — `normal` (default),
+`optimistic`, `excited`, `very_excited`, `concerned`, `disappointed`, or `critical` (not for
+medical profiles). It is stored on the run, colours the article and its X / LinkedIn versions,
+and survives revisions. Scheduled runs are always `normal`.
 
 The principle: **the only money spent is money a user asked to spend.** Cron keeps running
 only free jobs — the hourly publisher, route health, gate and draft reminders, a nudge push
@@ -313,6 +321,16 @@ translated edition as a second document. A failed translated edition never rolls
 primary.
 
 Publishing only ever happens in the production Worker (FR-8.5).
+
+### 6.1 Social posting
+
+At the end of `publishApprovedDraft`, after the article and its translated edition are live,
+each channel that was ticked and produced gets a `social_posts` row. With the profile's
+`socialPosting = auto` it posts right away: the approved text alone, then the article link as a
+**reply on X** / **first comment on LinkedIn**. With `confirm` (the default) the draft shows
+**Post** per channel. An unconnected account records *not connected*; a failure records the
+reason and never touches the article; **Retry** posts only what is missing. Retract deletes the
+posts too. Production only; held by `publishing.paused`. Detail: [design §17](design.md).
 
 Afterwards: the run closes as `published`, the approved post becomes a few-shot candidate for
 future generations, and [`POST /drafts/:id/retract`](../codebase/apps/backend/src/api/drafts.ts)
