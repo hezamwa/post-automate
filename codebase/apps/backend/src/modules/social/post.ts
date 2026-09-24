@@ -4,7 +4,8 @@ import { schema, type Db } from "../../db/client";
 import type { Env } from "../../shared/env";
 import { getFlags } from "../../shared/flags";
 import { notifyUser } from "../../shared/notify";
-import { latestDerivativeRevision } from "../generation";
+import { CHANNELS, latestDerivativeRevision } from "../generation";
+import { fitToLimit } from "../generation/channels";
 import { getActiveProfile } from "../profiles";
 import { getDocument } from "../publishing/sanity";
 import { articleUrl, linkFieldsOf } from "../publishing/url";
@@ -38,8 +39,10 @@ export async function postChannel(env: Env, db: Db, args: { draftId: string; cha
   }
   const draft = await db.query.drafts.findFirst({ where: eq(schema.drafts.id, draftId) });
   if (!draft || draft.status !== "published" || !draft.sanityDocumentId) throw new Error("only a published article can be posted (FR-18.2)");
-  const text = (await producedTexts(db, draftId)).get(channel);
-  if (!text) throw new Error(`no approved ${NAMES[channel]} text for this article`);
+  const approved = (await producedTexts(db, draftId)).get(channel);
+  if (!approved) throw new Error(`no approved ${NAMES[channel]} text for this article`);
+  // Last line of defence for texts stored before the hard cap existed (FR-6.12).
+  const text = fitToLimit(approved, CHANNELS[channel].maxChars);
   const existing = await postRow(db, draftId, channel);
   if (existing?.status === "posted") return existing;
   const fail = (reason: string, status: PostRow["status"] = "failed") => upsertPostRow(db, { draftId, userId: draft.userId, channel, status, reason });

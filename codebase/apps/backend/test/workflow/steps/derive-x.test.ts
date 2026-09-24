@@ -83,12 +83,16 @@ describe("derive-x step", () => {
     expect(shared.sanity.docs.get(docId)).toMatchObject({ xVersion: "tight" });
   });
 
-  it("keeps the first answer when the corrective pass comes back no shorter", async () => {
-    const { ctx, input } = await draftFor();
-    const long = "x".repeat(300);
+  it("caps the text at 280 when the corrective pass comes back no shorter — never stored over the limit", async () => {
+    const { ctx, docId, input } = await draftFor();
+    const long = "word ".repeat(62).trim(); // 309 chars
     shared.ai.respondWith("shorten_x", () => long);
-    expect(await runChannel(shared.step as never, ctx, deriveX, input)).toEqual({ outcome: "produced", length: 300 });
-    expect((await derivativeRows(input.draftId))[0]?.content).toBe(long);
+    const out = await runChannel(shared.step as never, ctx, deriveX, input);
+    expect(out.outcome).toBe("produced");
+    const stored = (await derivativeRows(input.draftId)).find((r) => r.content !== long)?.content ?? "";
+    expect([...stored].length).toBeLessThanOrEqual(280);
+    expect(stored.endsWith("word…")).toBe(true);
+    expect(shared.sanity.docs.get(docId)).toMatchObject({ xVersion: stored });
   });
 
   it("fails loudly when the draft's markdown is gone (purged, DR-9.11)", async () => {

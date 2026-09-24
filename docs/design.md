@@ -1188,6 +1188,11 @@ translated edition are live, best-effort, never rolling anything back:
    holds (FR-18.4), and a missing `users.site_url` fails with that reason (FR-18.8).
 
 Text rules: X text is the approved ≤280-char version; the reply is the article URL alone.
+The limit is hard: `derive-x` keeps the shorter of its two answers and trims anything still
+over 280 at a word boundary with "…", and posting applies the same trim to texts stored
+before the cap existed. *(Added 2026-09-24: the first live post had a 310-char X text that
+had slipped through, and X answers an over-long post from a non-Premium account with a bare
+403 "not permitted".)*
 LinkedIn commentary is the approved text, a blank line, then the URL — the text trimmed with
 "…" if both would pass 3,000 characters — escaped for LinkedIn's "little text" format, with
 `#tag` rewritten as a hashtag template so hashtags stay clickable. The

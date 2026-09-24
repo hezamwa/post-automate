@@ -5,7 +5,7 @@ import { NoRouteError } from "../../ai/router";
 import { createDb } from "../../db/client";
 import { getUserById, recordDerivatives } from "../../db/commands";
 import { CHANNELS, deriveChannelText, type ChannelKind } from "../../modules/generation";
-import { DECLINED_REASON, kindDecision } from "../../modules/generation/channels";
+import { DECLINED_REASON, fitToLimit, kindDecision } from "../../modules/generation/channels";
 import { patchDraftFields } from "../../modules/publishing";
 import { moduleCtx, profileOf, type RunContext } from "../context";
 import { defineStep, RETRY, runStep, type StepDef } from "./step";
@@ -69,9 +69,11 @@ export function channelStep(kind: ChannelKind): StepDef<ChannelInput, ChannelOut
         return { outcome: "declined" };
       }
       try {
-        const content = await deriveChannelText(ctx.env, db, moduleCtx(ctx), kind, draft.markdown, input.tooLong);
-        // A corrective pass only replaces the first answer when it is actually shorter.
-        if (input.tooLong && content.length >= input.tooLong.length) return { outcome: "produced", length: input.tooLong.length };
+        const answer = await deriveChannelText(ctx.env, db, moduleCtx(ctx), kind, draft.markdown, input.tooLong);
+        // The corrective pass keeps whichever answer is shorter, then the limit is enforced:
+        // an over-limit text is never stored as produced (FR-6.12).
+        const best = input.tooLong && answer.length >= input.tooLong.length ? input.tooLong : answer;
+        const content = input.tooLong ? fitToLimit(best, channel.maxChars) : answer;
         await record({ outcome: "produced", content });
         if (draft.sanityDocumentId) {
           await patchDraftFields(ctx.env, await getUserById(db, ctx.userId), draft.sanityDocumentId, { [FIELD[kind]]: content });

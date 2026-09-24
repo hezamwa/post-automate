@@ -25,3 +25,16 @@ export function kindDecision(profile: Profile, selection: readonly string[] | nu
 }
 
 export const DECLINED_REASON = "Not selected — the creator left this unticked (spec §4.3).";
+
+/**
+ * FR-6.12: a channel text never exceeds its limit. The model is asked to shorten once; if
+ * the answer is still long, it is trimmed at the last word boundary with "…" — a hard cap,
+ * because X refuses an over-long post outright (403 for accounts without Premium).
+ */
+export function fitToLimit(text: string, max: number): string {
+  const chars = [...text]; // code points, so Arabic and emoji are never split
+  if (chars.length <= max) return text;
+  const head = chars.slice(0, max - 1).join("");
+  const cut = head.lastIndexOf(" ");
+  return `${(cut > max * 0.6 ? head.slice(0, cut) : head).trimEnd()}…`;
+}

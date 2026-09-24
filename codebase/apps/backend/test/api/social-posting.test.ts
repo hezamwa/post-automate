@@ -123,6 +123,20 @@ describe("confirm mode and the post/retry route", () => {
   });
 });
 
+describe("length cap at posting (FR-6.12)", () => {
+  it("an approved X text stored over 280 chars is trimmed before posting, not refused", async () => {
+    const { calls } = platforms();
+    const { draftId, token } = await publishedDraft({ connect: ["x"] });
+    const long = "Sat in enough command centers to know this. ".repeat(8).trim(); // ~350 chars
+    await shared.db.update(schema.draftDerivatives).set({ content: long }).where(eq(schema.draftDerivatives.draftId, draftId));
+    const res = await call(env(), `/drafts/${draftId}/social/x`, { method: "POST", token });
+    expect(res.json.post).toMatchObject({ status: "posted" });
+    const sent = calls[0]!.body.text as string;
+    expect([...sent].length).toBeLessThanOrEqual(280);
+    expect(sent.endsWith("…")).toBe(true);
+  });
+});
+
 describe("guards", () => {
   it("no site URL, not production, not connected → recorded with the reason, nothing posted", async () => {
     const { calls } = platforms();
