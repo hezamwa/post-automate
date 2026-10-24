@@ -94,8 +94,8 @@ A mode is an ordered list of step kinds, run by one shared engine.
 | Outline |  |  | ✓ |
 | Write whole draft |  | ✓ |  |
 | Write section by section |  |  | ✓ |
-| Claim check | ✓ | ✓ | ✓ |
 | Standalone posts | ✓ | ✓ | ✓ |
+| Claim check | ✓ | ✓ | ✓ |
 | Publish per channel | ✓ | ✓ | ✓ |
 
 - Writing granularity is chosen per piece: section by section for Deep, the whole draft for Quick, and any section can still be rewritten on its own.
@@ -117,8 +117,8 @@ In-progress and recently published pieces appear below the entry points.
 3. **Settings**, preset by type and profile, all visible and changeable.
 4. **Your take:** text or voice, always optional. Voice is transcribed on-device, shown and editable, then tidied into points without losing the creator's phrasing.
 5. Mode-specific steps (angle, outline, sections, or the whole draft).
-6. **Claim check** (§9).
-7. **Standalone posts** for the selected channels.
+6. **Standalone posts** for the selected channels.
+7. **Claim check** (§9) over everything written: the article and every post.
 8. **Publish per channel** (§10).
 
 **Interaction rules:**
@@ -131,12 +131,13 @@ In-progress and recently published pieces appear below the entry points.
 
 ## 8. Accuracy and voice
 
-- **Facts** are the only source of personal claims. Each is one short statement, marked **public** (usable in content) or **context only** (background, never written, e.g. Afnan's institution).
+- **Facts** are the only source of personal claims, and they hold only claims about the creator, never general knowledge. Each is one short statement, marked **public** (usable in content) or **context only** (background, never written, e.g. Afnan's institution).
 - **Voice** is built from the creator's own words: their take in each piece, onboarding answers, and every approved piece. Résumé text is never used as a voice sample.
 - The AI never invents first-person experiences. If a type needs personal substance and none exists, the app asks for a note or link instead of inventing.
 
 ## 9. Claim check
 
+- Runs after all outputs are written, so it covers the article and every post. In Post mode, it covers the posts alone.
 - A cheap model extracts every factual claim from the draft and the posts.
 - Each claim is labeled:
   1. **Sourced:** backed by a fetched source.
@@ -144,8 +145,12 @@ In-progress and recently published pieces appear below the entry points.
   3. **Opinion:** clearly a view.
   4. **Unsupported:** none of the above.
 - Only doubtful matches are escalated to a stronger model.
-- **Approval is blocked** until every unsupported claim is removed, fixed, or confirmed true by the creator.
-- A claim the creator confirms is saved as a new **public fact**, usable in future pieces.
+- Each claim is also marked as **about the creator** (their experience, work, role) or **about the world** (everything else). The creator can correct this mark.
+- **Approval is blocked** until every unsupported claim is removed, fixed, or confirmed:
+  - **About the creator:** the creator confirms it, and it is saved as a new public fact, usable in future pieces.
+  - **About the world:** the creator confirms it for this piece only. It is kept with the piece's claim check and is never saved as a fact.
+  - **About the world, in a medical piece:** it can't be confirmed. It needs an authoritative source, or it is removed.
+- Any section or post rewritten after the check is checked again before approval. Only the rewritten part is re-checked, not the whole piece.
 - A claim-by-claim view (each claim beside its source passage) is available to everyone, and is the default review view for medical pieces.
 
 ## 10. Publishing
@@ -280,15 +285,16 @@ Cut from the old system: three kill switches with audit trail, daily health chec
 
 ## 17. Platform
 
-- **Backend:** C# / ASP.NET Core modular monolith (DDD), EF Core, Hangfire for jobs and scheduled publishing, Server-Sent Events for streaming. Microsoft.Extensions.AI as the base for the AI router.
-- **Hosting:** Oracle Cloud Ampere A1 VM, account converted to Pay As You Go on day one (prevents idle reclamation), with a budget alert. Docker Compose running the API and cloudflared.
-- **Network:** Cloudflare DNS and Tunnel; no open ports on the VM.
-- **Database:** Neon PostgreSQL (managed backups and point-in-time recovery). The VM is stateless and disposable.
+- **Backend:** C# / ASP.NET Core on .NET 10, a modular monolith with Clean Architecture and DDD. EF Core, Hangfire for jobs and scheduled publishing, Server-Sent Events for streaming. Microsoft.Extensions.AI as the base for the AI router.
+- **Hosting:** Oracle Cloud only, so everything is managed in one place. An Ampere A1 VM (Always Free allowance: 2 OCPUs, 12 GB), account converted to Pay As You Go on day one (prevents idle reclamation), with a budget alert. Docker Compose runs the API. The VM is stateless and disposable.
+- **Database:** PostgreSQL for development. Production is not chosen yet; if it is PostgreSQL, it runs as a managed service, never on the VM. The database provider is switchable: engine-specific code and migrations live only in provider projects, chosen by configuration.
 - **Mobile:** Flutter, iPhone first, distributed via TestFlight, with small native Swift pieces for the Share Extension and on-device speech. Android is not a priority.
-- **Admin:** SPA (Blazor WebAssembly suggested) on Cloudflare Pages.
-- **Deploy:** GitHub Actions builds an ARM64 image, pushes it to the GitHub Container Registry, and the VM pulls it.
+- **Admin:** a standalone SPA in its own project, using an API client generated from the backend's OpenAPI document.
+- **Deploy:** GitHub Actions builds an ARM64 image and the VM pulls it.
 - **Ops:** unattended security upgrades, one free uptime check, secret rotation every 6 months.
-- **Codebase:** fresh repo, copying proven parts from V1: Sanity field mapping, Markdown-to-rich-text conversion, LinkedIn and X OAuth, discovery logic and the hero image generator.
+- **Codebase:** same repo, with V1 kept in `archive/v1` for reference. Proven parts are copied from V1: Sanity field mapping, Markdown-to-rich-text conversion, LinkedIn and X OAuth, discovery logic and the hero image generator.
+  - `codebase/backend`: the `WaleedAlHezam.PostAutomate` solution. A shared kernel and building blocks, then one project per module and layer (Domain, Contracts, Application, Infrastructure, Infrastructure.PostgreSql, Presentation). Seed data for the catalog and prompts.
+  - `codebase/admin`, `codebase/mobile`, `codebase/deploy`.
 
 ## 18. Release plan
 
@@ -320,5 +326,6 @@ Cut from the old system: three kill switches with audit trail, daily health chec
 - Prompt test sets and how a prompt change is verified before release.
 - Remaining per-type fields: hero image use, call to action, hashtag policy.
 - Detailed admin observability views.
-- Confirm the Oracle region relative to the Neon region.
+- Production database (managed PostgreSQL or another managed engine).
+- Whether "Oracle only" also covers DNS and ingress (instead of Cloudflare DNS and Tunnel), admin hosting and the container registry.
 - Confirm whether either Sanity schema requires a hero image.
