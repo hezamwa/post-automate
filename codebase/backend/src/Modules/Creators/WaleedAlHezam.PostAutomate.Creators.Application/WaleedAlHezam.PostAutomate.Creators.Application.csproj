@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../WaleedAlHezam.PostAutomate.Creators.Domain/WaleedAlHezam.PostAutomate.Creators.Domain.csproj" />
+    <ProjectReference Include="../WaleedAlHezam.PostAutomate.Creators.Contracts/WaleedAlHezam.PostAutomate.Creators.Contracts.csproj" />
+    <ProjectReference Include="../../../WaleedAlHezam.PostAutomate.BuildingBlocks.Application/WaleedAlHezam.PostAutomate.BuildingBlocks.Application.csproj" />
+  </ItemGroup>
+
+</Project>

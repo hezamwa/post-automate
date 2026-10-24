@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Publishing.Infrastructure.PostgreSql.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Catalog.Infrastructure.PostgreSql.csproj" />
+  </ItemGroup>
+
+</Project>

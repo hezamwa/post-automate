@@ -1,0 +1,93 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WaleedAlHezam.PostAutomate.BuildingBlocks.Application/WaleedAlHezam.PostAutomate.BuildingBlocks.Application.csproj" />
+    <Project Path="src/WaleedAlHezam.PostAutomate.BuildingBlocks.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.BuildingBlocks.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/WaleedAlHezam.PostAutomate.BuildingBlocks.Infrastructure/WaleedAlHezam.PostAutomate.BuildingBlocks.Infrastructure.csproj" />
+    <Project Path="src/WaleedAlHezam.PostAutomate.Host/WaleedAlHezam.PostAutomate.Host.csproj" />
+    <Project Path="src/WaleedAlHezam.PostAutomate.SharedKernel/WaleedAlHezam.PostAutomate.SharedKernel.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/" />
+  <Folder Name="/src/Modules/AiGateway/">
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Application/WaleedAlHezam.PostAutomate.AiGateway.Application.csproj" />
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Contracts/WaleedAlHezam.PostAutomate.AiGateway.Contracts.csproj" />
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Domain/WaleedAlHezam.PostAutomate.AiGateway.Domain.csproj" />
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.AiGateway.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Infrastructure/WaleedAlHezam.PostAutomate.AiGateway.Infrastructure.csproj" />
+    <Project Path="src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Presentation/WaleedAlHezam.PostAutomate.AiGateway.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Authoring/">
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Application/WaleedAlHezam.PostAutomate.Authoring.Application.csproj" />
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Contracts/WaleedAlHezam.PostAutomate.Authoring.Contracts.csproj" />
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Domain/WaleedAlHezam.PostAutomate.Authoring.Domain.csproj" />
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Authoring.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Infrastructure/WaleedAlHezam.PostAutomate.Authoring.Infrastructure.csproj" />
+    <Project Path="src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Presentation/WaleedAlHezam.PostAutomate.Authoring.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Catalog/">
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Application/WaleedAlHezam.PostAutomate.Catalog.Application.csproj" />
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Contracts/WaleedAlHezam.PostAutomate.Catalog.Contracts.csproj" />
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Domain/WaleedAlHezam.PostAutomate.Catalog.Domain.csproj" />
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Catalog.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Infrastructure/WaleedAlHezam.PostAutomate.Catalog.Infrastructure.csproj" />
+    <Project Path="src/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Presentation/WaleedAlHezam.PostAutomate.Catalog.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Creators/">
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Application/WaleedAlHezam.PostAutomate.Creators.Application.csproj" />
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Contracts/WaleedAlHezam.PostAutomate.Creators.Contracts.csproj" />
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Domain/WaleedAlHezam.PostAutomate.Creators.Domain.csproj" />
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Creators.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Infrastructure/WaleedAlHezam.PostAutomate.Creators.Infrastructure.csproj" />
+    <Project Path="src/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Presentation/WaleedAlHezam.PostAutomate.Creators.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Observability/">
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Application/WaleedAlHezam.PostAutomate.Observability.Application.csproj" />
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Contracts/WaleedAlHezam.PostAutomate.Observability.Contracts.csproj" />
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Domain/WaleedAlHezam.PostAutomate.Observability.Domain.csproj" />
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Observability.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Infrastructure/WaleedAlHezam.PostAutomate.Observability.Infrastructure.csproj" />
+    <Project Path="src/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Presentation/WaleedAlHezam.PostAutomate.Observability.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Publishing/">
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Application/WaleedAlHezam.PostAutomate.Publishing.Application.csproj" />
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Contracts/WaleedAlHezam.PostAutomate.Publishing.Contracts.csproj" />
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Domain/WaleedAlHezam.PostAutomate.Publishing.Domain.csproj" />
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Infrastructure.PostgreSql/WaleedAlHezam.PostAutomate.Publishing.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Infrastructure/WaleedAlHezam.PostAutomate.Publishing.Infrastructure.csproj" />
+    <Project Path="src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Presentation/WaleedAlHezam.PostAutomate.Publishing.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WaleedAlHezam.PostAutomate.ArchitectureTests/WaleedAlHezam.PostAutomate.ArchitectureTests.csproj" />
+    <Project Path="tests/WaleedAlHezam.PostAutomate.PromptTests/WaleedAlHezam.PostAutomate.PromptTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/" />
+  <Folder Name="/tests/Modules/AiGateway/">
+    <Project Path="tests/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Application.Tests/WaleedAlHezam.PostAutomate.AiGateway.Application.Tests.csproj" />
+    <Project Path="tests/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Domain.Tests/WaleedAlHezam.PostAutomate.AiGateway.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.IntegrationTests/WaleedAlHezam.PostAutomate.AiGateway.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Authoring/">
+    <Project Path="tests/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Application.Tests/WaleedAlHezam.PostAutomate.Authoring.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Domain.Tests/WaleedAlHezam.PostAutomate.Authoring.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.IntegrationTests/WaleedAlHezam.PostAutomate.Authoring.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Catalog/">
+    <Project Path="tests/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Application.Tests/WaleedAlHezam.PostAutomate.Catalog.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.Domain.Tests/WaleedAlHezam.PostAutomate.Catalog.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Catalog/WaleedAlHezam.PostAutomate.Catalog.IntegrationTests/WaleedAlHezam.PostAutomate.Catalog.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Creators/">
+    <Project Path="tests/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Application.Tests/WaleedAlHezam.PostAutomate.Creators.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.Domain.Tests/WaleedAlHezam.PostAutomate.Creators.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Creators/WaleedAlHezam.PostAutomate.Creators.IntegrationTests/WaleedAlHezam.PostAutomate.Creators.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Observability/">
+    <Project Path="tests/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Application.Tests/WaleedAlHezam.PostAutomate.Observability.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.Domain.Tests/WaleedAlHezam.PostAutomate.Observability.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Observability/WaleedAlHezam.PostAutomate.Observability.IntegrationTests/WaleedAlHezam.PostAutomate.Observability.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Publishing/">
+    <Project Path="tests/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Application.Tests/WaleedAlHezam.PostAutomate.Publishing.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Domain.Tests/WaleedAlHezam.PostAutomate.Publishing.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.IntegrationTests/WaleedAlHezam.PostAutomate.Publishing.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

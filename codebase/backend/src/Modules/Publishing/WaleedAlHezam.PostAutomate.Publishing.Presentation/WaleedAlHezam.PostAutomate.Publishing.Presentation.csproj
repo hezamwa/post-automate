@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../WaleedAlHezam.PostAutomate.Publishing.Application/WaleedAlHezam.PostAutomate.Publishing.Application.csproj" />
+  </ItemGroup>
+
+</Project>

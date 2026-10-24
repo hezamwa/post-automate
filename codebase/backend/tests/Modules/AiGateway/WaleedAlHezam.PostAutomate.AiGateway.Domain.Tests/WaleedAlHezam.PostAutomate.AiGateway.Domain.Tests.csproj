@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Modules/AiGateway/WaleedAlHezam.PostAutomate.AiGateway.Domain/WaleedAlHezam.PostAutomate.AiGateway.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

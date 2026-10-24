@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Modules/Publishing/WaleedAlHezam.PostAutomate.Publishing.Application/WaleedAlHezam.PostAutomate.Publishing.Application.csproj" />
+  </ItemGroup>
+
+</Project>

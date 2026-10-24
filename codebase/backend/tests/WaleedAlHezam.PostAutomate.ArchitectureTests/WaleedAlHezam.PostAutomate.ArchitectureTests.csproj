@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/WaleedAlHezam.PostAutomate.Host/WaleedAlHezam.PostAutomate.Host.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/Modules/Authoring/WaleedAlHezam.PostAutomate.Authoring.Domain/WaleedAlHezam.PostAutomate.Authoring.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
